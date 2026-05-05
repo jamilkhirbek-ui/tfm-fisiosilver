@@ -1,0 +1,131 @@
+
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Asistente de Salud Senior - Fisiosilver</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['Inter', 'system-ui', 'sans-serif'],
+            },
+            colors: {
+              'brand-blue': '#0062E3',
+              'brand-blue-dark': '#004BB3',
+              'brand-lightblue': '#F0F7FF',
+              'brand-bg': '#F8FAFC',
+              'brand-green': '#10B981',
+              'brand-soft-green': '#ECFDF5',
+              'brand-yellow': '#F59E0B',
+              'brand-soft-yellow': '#FFFBEB',
+              'brand-red': '#EF4444',
+              'brand-soft-red': '#FEF2F2',
+              'brand-orange': '#F97316',
+              'brand-soft-orange': '#FFF7ED',
+              'brand-gray': {
+                50: '#F9FAFB',
+                100: '#F3F4F6',
+                200: '#E5E7EB',
+                300: '#D1D5DB',
+                400: '#9CA3AF',
+                500: '#6B7280',
+                600: '#4B5563',
+                700: '#374151',
+                800: '#1F2937',
+                900: '#111827',
+              },
+            },
+            borderRadius: {
+              'v-large': '1.5rem',
+              'v-xl': '2rem',
+              'v-2xl': '2.5rem',
+            },
+            boxShadow: {
+              'soft': '0 4px 12px -1px rgba(0, 0, 0, 0.03), 0 2px 4px -1px rgba(0, 0, 0, 0.02)',
+              'premium': '0 10px 30px -10px rgba(0, 98, 227, 0.12), 0 4px 12px -4px rgba(0, 0, 0, 0.04)',
+              'premium-lg': '0 20px 50px -12px rgba(0, 98, 227, 0.15), 0 8px 16px -6px rgba(0, 0, 0, 0.05)',
+            },
+            backgroundImage: {
+              'glass': 'linear-gradient(135deg, rgba(255, 255, 255, 0.7) 0%, rgba(255, 255, 255, 0.5) 100%)',
+              'brand-gradient': 'linear-gradient(135deg, #0062E3 0%, #004BB3 100%)',
+              'green-gradient': 'linear-gradient(135deg, #10B981 0%, #059669 100%)',
+              'red-gradient': 'linear-gradient(135deg, #EF4444 0%, #DC2626 100%)',
+              'orange-gradient': 'linear-gradient(135deg, #F97316 0%, #EA580C 100%)',
+            },
+            animation: {
+              'fade-in': 'fadeIn 0.4s ease-out',
+              'slide-up': 'slideUp 0.5s cubic-bezier(0.16, 1, 0.3, 1)',
+              'pulse-soft': 'pulseSoft 3s infinite',
+            },
+            keyframes: {
+              fadeIn: {
+                '0%': { opacity: '0' },
+                '100%': { opacity: '1' },
+              },
+              slideUp: {
+                '0%': { transform: 'translateY(20px)', opacity: '0' },
+                '100%': { transform: 'translateY(0)', opacity: '1' },
+              },
+              pulseSoft: {
+                '0%, 100%': { transform: 'scale(1)', opacity: '1' },
+                '50%': { transform: 'scale(1.02)', opacity: '0.9' },
+              },
+            },
+          },
+        },
+      };
+    </script>
+    <style>
+      body {
+        background-color: #F8FAFC;
+        -webkit-font-smoothing: antialiased;
+        color: #1F2937;
+      }
+      .glass-card {
+        background: rgba(255, 255, 255, 0.7);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.3);
+      }
+      .bento-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 1.5rem;
+      }
+      .custom-scrollbar::-webkit-scrollbar {
+        width: 6px;
+      }
+      .custom-scrollbar::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      .custom-scrollbar::-webkit-scrollbar-thumb {
+        background: #E5E7EB;
+        border-radius: 10px;
+      }
+      .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+        background: #D1D5DB;
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.28.0",
+    "@supabase/supabase-js": "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+  </body>
+</html>

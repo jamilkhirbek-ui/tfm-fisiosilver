@@ -1,0 +1,8 @@
+{
+  "name": "Fisiosilver - Salud Senior",
+  "description": "Aplicación para mayores de 65 años centrada en la prevención de la fragilidad y el monitoreo de constantes vitales con IA.",
+  "requestFramePermissions": [
+    "microphone",
+    "camera"
+  ]
+}
