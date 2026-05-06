@@ -1,6 +1,7 @@
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 import type {
     AdminUserSummary,
+    Biomarkers,
     ClinicalAnalysis,
     DailyLogRecord,
     HealthData,
@@ -11,7 +12,9 @@ import type {
     UserActionLog,
     UserProfile,
     UserRole,
+    VigsAssessmentRecord,
     VigsCategory,
+    VigsScore,
 } from '../types';
 
 const isDemo = !isSupabaseConfigured;
@@ -52,6 +55,54 @@ const serializeAuditValue = (value: unknown): string | null => {
     if (value === undefined || value === null) return null;
     if (typeof value === 'string') return value;
     return JSON.stringify(value);
+};
+
+const parseNumberOrNull = (value: string | number | null | undefined): number | null | undefined => {
+    if (value === undefined) return undefined;
+    if (value === null) return null;
+    if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+
+    const cleanedValue = value.trim().replace(',', '.').replace(/[^0-9.-]/g, '');
+    if (!cleanedValue || cleanedValue === '-' || cleanedValue === '.') return null;
+
+    const parsedValue = Number.parseFloat(cleanedValue);
+    return Number.isFinite(parsedValue) ? parsedValue : null;
+};
+
+const mapVigsAnswersToDb = (answers: Record<string, number>) => {
+    const totalPoints = Object.values(answers).reduce((sum, val) => sum + val, 0);
+    const index = totalPoints / 25.0;
+
+    return {
+        totalPoints,
+        index,
+        dbData: {
+            ayuda_dinero: answers.dinero > 0,
+            ayuda_telefono: answers.telefono > 0,
+            ayuda_medicacion: answers.medicacion > 0,
+            barthel_grado: Math.min(3, Math.max(0, answers.barthel || 0)),
+            perdida_peso_6m: answers.malnutricion > 0,
+            deterioro_cognitivo_grado: Math.min(2, Math.max(0, answers.deterioro_cognitivo || 0)),
+            usa_antidepresivos: answers.depresion > 0,
+            usa_psicofarmacos: answers.ansiedad > 0,
+            vulnerabilidad_social: answers.vulnerabilidad > 0,
+            presenta_delirium: answers.confusional > 0,
+            caidas_recuentes: answers.caidas > 0,
+            presenta_ulceras: answers.ulceras > 0,
+            polifarmacia: answers.polifarmacia > 0,
+            presenta_disfagia: answers.disfagia > 0,
+            dolor_control_dificil: answers.dolor > 0,
+            disnea_basal: answers.disnea > 0,
+            enf_oncologica: Math.min(2, Math.max(0, answers.cancer || 0)),
+            enf_respiratoria: Math.min(2, Math.max(0, answers.respiratoria || 0)),
+            enf_cardiaca: Math.min(2, Math.max(0, answers.cardiaca || 0)),
+            enf_neurodegenerativa: Math.min(2, Math.max(0, answers.neurologica || 0)),
+            enf_digestiva: Math.min(2, Math.max(0, answers.digestiva || 0)),
+            enf_renal_cronica: Math.min(2, Math.max(0, answers.renal || 0)),
+            puntos_totales: totalPoints,
+            indice_vig_resultado: index,
+        },
+    };
 };
 
 const mapHealthDataToDb = (healthData: Partial<HealthData>) => {
@@ -260,6 +311,54 @@ export const auditVigsAssessmentChange = async (
     }
 };
 
+export const auditClinicalReportChange = async (
+    reportId: string,
+    modifiedBy: string,
+    fieldName: string,
+    oldValue: unknown,
+    newValue: unknown,
+): Promise<void> => {
+    if (isDemo) return;
+    try {
+        const { error } = await supabase.from('clinical_reports_audit').insert({
+            report_id: reportId,
+            modified_by: modifiedBy,
+            field_name: fieldName,
+            old_value: serializeAuditValue(oldValue),
+            new_value: serializeAuditValue(newValue),
+        });
+        if (error) {
+            console.warn('[AUDIT] No se pudo auditar el informe clínico:', getErrorMessage(error));
+        }
+    } catch (error) {
+        console.warn('[AUDIT] Error no bloqueante auditando informe clínico:', error);
+    }
+};
+
+export const auditNutritionLogChange = async (
+    logId: string,
+    modifiedBy: string,
+    fieldName: string,
+    oldValue: unknown,
+    newValue: unknown,
+): Promise<void> => {
+    if (isDemo) return;
+    try {
+        const { error } = await supabase.from('nutrition_logs_audit').insert({
+            nutrition_log_id: logId,
+            modified_by: modifiedBy,
+            field_name: fieldName,
+            old_value: serializeAuditValue(oldValue),
+            new_value: serializeAuditValue(newValue),
+        });
+        if (error) {
+            console.warn('[AUDIT] No se pudo auditar el registro nutricional:', getErrorMessage(error));
+        }
+    } catch (error) {
+        console.warn('[AUDIT] Error no bloqueante auditando nutrición:', error);
+    }
+};
+
 export const initializeUser = async (uid: string, email: string): Promise<UserProfile> => {
     if (isDemo) return mapDbToProfile({ email, nombre_usuario: 'Usuario Demo' });
 
@@ -338,37 +437,11 @@ export const updateUserProfile = async (uid: string, profile: Partial<UserProfil
 export const saveVigsAssessment = async (uid: string, answers: Record<string, number>): Promise<void> => {
     if (isDemo) return;
 
-    const totalPoints = Object.values(answers).reduce((sum, val) => sum + val, 0);
-    const index = totalPoints / 25.0;
-    const dbData = {
+    const { totalPoints, dbData } = mapVigsAnswersToDb(answers);
+    const { data: createdAssessment, error } = await supabase.from('vigs_assessments').insert({
         user_id: uid,
-        ayuda_dinero: answers.dinero > 0,
-        ayuda_telefono: answers.telefono > 0,
-        ayuda_medicacion: answers.medicacion > 0,
-        barthel_grado: Math.min(3, Math.max(0, answers.barthel || 0)),
-        perdida_peso_6m: answers.malnutricion > 0,
-        deterioro_cognitivo_grado: Math.min(2, Math.max(0, answers.deterioro_cognitivo || 0)),
-        usa_antidepresivos: answers.depresion > 0,
-        usa_psicofarmacos: answers.ansiedad > 0,
-        vulnerabilidad_social: answers.vulnerabilidad > 0,
-        presenta_delirium: answers.confusional > 0,
-        caidas_recuentes: answers.caidas > 0,
-        presenta_ulceras: answers.ulceras > 0,
-        polifarmacia: answers.polifarmacia > 0,
-        presenta_disfagia: answers.disfagia > 0,
-        dolor_control_dificil: answers.dolor > 0,
-        disnea_basal: answers.disnea > 0,
-        enf_oncologica: Math.min(2, Math.max(0, answers.cancer || 0)),
-        enf_respiratoria: Math.min(2, Math.max(0, answers.respiratoria || 0)),
-        enf_cardiaca: Math.min(2, Math.max(0, answers.cardiaca || 0)),
-        enf_neurodegenerativa: Math.min(2, Math.max(0, answers.neurologica || 0)),
-        enf_digestiva: Math.min(2, Math.max(0, answers.digestiva || 0)),
-        enf_renal_cronica: Math.min(2, Math.max(0, answers.renal || 0)),
-        puntos_totales: totalPoints,
-        indice_vig_resultado: index,
-    };
-
-    const { data: createdAssessment, error } = await supabase.from('vigs_assessments').insert(dbData).select('id').single();
+        ...dbData,
+    }).select('id').single();
     if (error) throw new Error(getErrorMessage(error));
 
     if (createdAssessment?.id) {
@@ -390,11 +463,134 @@ export const saveVigsAssessment = async (uid: string, answers: Record<string, nu
     await logUserAction(uid, 'vig_created', `Evaluación VIG registrada con ${totalPoints} puntos.`);
 };
 
-export const getVigsHistory = async (uid: string): Promise<{ index: number; createdAt: Date }[]> => {
+const mapDbVigsAssessmentToRecord = (item: any): VigsAssessmentRecord => {
+    const index = Number(item.indice_vig_resultado ?? 0);
+    return {
+        id: item.id,
+        userId: item.user_id,
+        score: Number(item.puntos_totales ?? 0),
+        category: getCategoryFromIndex(index),
+        index,
+        createdAt: new Date(item.created_at),
+    };
+};
+
+export const getVigsAssessments = async (userId: string): Promise<VigsAssessmentRecord[]> => {
     if (isDemo) return [];
-    const { data, error } = await supabase.from('vigs_assessments').select('indice_vig_resultado, created_at').eq('user_id', uid).order('created_at', { ascending: false });
+    const { data, error } = await supabase
+        .from('vigs_assessments')
+        .select('id, user_id, puntos_totales, indice_vig_resultado, created_at')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false });
+
     if (error) throw new Error(getErrorMessage(error));
-    return (data || []).map((item) => ({ index: item.indice_vig_resultado, createdAt: new Date(item.created_at) }));
+    return (data || []).map(mapDbVigsAssessmentToRecord);
+};
+
+export const getVigsAssessmentAnswers = async (assessmentId: string): Promise<Record<string, number>> => {
+    if (isDemo) return {};
+    const { data, error } = await supabase
+        .from('assessment_answers')
+        .select('question_key, answer_value')
+        .eq('assessment_id', assessmentId);
+
+    if (error) throw new Error(getErrorMessage(error));
+    return (data || []).reduce<Record<string, number>>((answers, item: any) => {
+        answers[item.question_key] = Number(item.answer_value ?? 0);
+        return answers;
+    }, {});
+};
+
+export const updateVigsAssessment = async (
+    assessmentId: string,
+    userId: string,
+    answers: Record<string, number>,
+): Promise<VigsScore> => {
+    const { totalPoints, index, dbData } = mapVigsAnswersToDb(answers);
+    const updatedScore: VigsScore = {
+        score: totalPoints,
+        index,
+        category: getCategoryFromIndex(index),
+    };
+
+    if (isDemo) return updatedScore;
+
+    const { data: existingAssessment, error: existingError } = await supabase
+        .from('vigs_assessments')
+        .select('*')
+        .eq('id', assessmentId)
+        .eq('user_id', userId)
+        .maybeSingle();
+
+    if (existingError) throw new Error(getErrorMessage(existingError));
+    if (!existingAssessment) throw new Error('No se encontró la evaluación VIG a corregir.');
+
+    const { data: existingAnswerRows, error: answersError } = await supabase
+        .from('assessment_answers')
+        .select('id, question_key, answer_value')
+        .eq('assessment_id', assessmentId);
+
+    if (answersError) throw new Error(getErrorMessage(answersError));
+
+    const { error: updateError } = await supabase
+        .from('vigs_assessments')
+        .update(dbData)
+        .eq('id', assessmentId)
+        .eq('user_id', userId);
+
+    if (updateError) throw new Error(getErrorMessage(updateError));
+
+    const previousAnswers = (existingAnswerRows || []).reduce<Record<string, { id: string; value: number }>>((acc, row) => {
+        acc[row.question_key] = { id: row.id, value: Number(row.answer_value ?? 0) };
+        return acc;
+    }, {});
+
+    for (const [questionKey, answerValue] of Object.entries(answers)) {
+        const existingAnswer = previousAnswers[questionKey];
+        if (existingAnswer) {
+            const { error } = await supabase
+                .from('assessment_answers')
+                .update({ answer_value: answerValue })
+                .eq('id', existingAnswer.id);
+            if (error) throw new Error(getErrorMessage(error));
+        } else {
+            const { error } = await supabase.from('assessment_answers').insert({
+                assessment_id: assessmentId,
+                question_key: questionKey,
+                answer_value: answerValue,
+            });
+            if (error) throw new Error(getErrorMessage(error));
+        }
+    }
+
+    const changedAssessmentFields = Object.entries(dbData).filter(([key, newValue]) => (
+        key === 'puntos_totales' ||
+        key === 'indice_vig_resultado' ||
+        serializeAuditValue(existingAssessment[key]) !== serializeAuditValue(newValue)
+    )).filter(([key, newValue]) => serializeAuditValue(existingAssessment[key]) !== serializeAuditValue(newValue));
+
+    const changedAnswerFields = Object.entries(answers).filter(([questionKey, answerValue]) => (
+        serializeAuditValue(previousAnswers[questionKey]?.value ?? null) !== serializeAuditValue(answerValue)
+    ));
+
+    await Promise.all([
+        ...changedAssessmentFields.map(([key, newValue]) => auditVigsAssessmentChange(assessmentId, userId, key, existingAssessment[key], newValue)),
+        ...changedAnswerFields.map(([questionKey, answerValue]) => auditVigsAssessmentChange(
+            assessmentId,
+            userId,
+            `answer_${questionKey}`,
+            previousAnswers[questionKey]?.value ?? null,
+            answerValue,
+        )),
+    ]);
+
+    await logUserAction(userId, 'vig_updated', `Evaluación VIG corregida con ${totalPoints} puntos.`);
+    return updatedScore;
+};
+
+export const getVigsHistory = async (uid: string): Promise<{ index: number; createdAt: Date }[]> => {
+    const history = await getVigsAssessments(uid);
+    return history.map((item) => ({ index: item.index, createdAt: item.createdAt }));
 };
 
 export const registerUserInDb = async (uid: string, profile: UserProfile, createdBy: string = uid): Promise<void> => {
@@ -470,8 +666,32 @@ export const updateDailyLog = async (
     await logUserAction(modifiedBy, 'daily_log_updated', `Se ha corregido el registro diario ${logId}.`);
 };
 
-export const saveNutritionLog = async (uid: string, analysis: NutritionalAnalysis): Promise<void> => {
-    if (isDemo) return;
+type NutritionLogUpdates = {
+    calories?: string;
+    protein?: string;
+    carbs?: string;
+    fatsTotal?: string;
+    portions?: string;
+};
+
+const getNutritionDescriptionPrefix = (description: string): string => {
+    const nutriScorePrefix = description.match(/\[NS:[A-E]\]\s*/)?.[0] || '';
+    const scorePrefix = description.match(/\[SC:[^\]]+\]\s*/)?.[0] || '';
+    return `${nutriScorePrefix}${scorePrefix}`;
+};
+
+const mapNutritionUpdatesToDb = (updates: NutritionLogUpdates, existingDescription: string) => {
+    const dbUpdates: Record<string, any> = {};
+    if (updates.calories !== undefined) dbUpdates.calorias_est = parseNumberOrNull(updates.calories) ?? null;
+    if (updates.protein !== undefined) dbUpdates.proteinas_g = parseNumberOrNull(updates.protein) ?? null;
+    if (updates.carbs !== undefined) dbUpdates.carbohidratos_g = parseNumberOrNull(updates.carbs) ?? null;
+    if (updates.fatsTotal !== undefined) dbUpdates.grasas_g = parseNumberOrNull(updates.fatsTotal) ?? null;
+    if (updates.portions !== undefined) dbUpdates.comida_descripcion = `${getNutritionDescriptionPrefix(existingDescription)}${updates.portions}`;
+    return dbUpdates;
+};
+
+export const saveNutritionLog = async (uid: string, analysis: NutritionalAnalysis): Promise<string> => {
+    if (isDemo) return analysis.id;
 
     const nutriScorePrefix = analysis.analysis.nutriScore ? `[NS:${analysis.analysis.nutriScore}] ` : '';
     const score = analysis.analysis.nutritionScores;
@@ -479,18 +699,19 @@ export const saveNutritionLog = async (uid: string, analysis: NutritionalAnalysi
         ? `[SC:${score.protein},${score.fiber},${score.healthyFats},${score.micronutrients},${score.glycemicIndex},${score.sodiumBalance}] `
         : '';
 
-    const { error } = await supabase.from('nutrition_logs').insert({
+    const { data, error } = await supabase.from('nutrition_logs').insert({
         user_id: uid,
         foto_url: analysis.imagePreview,
         comida_descripcion: `${nutriScorePrefix}${scorePrefix}${analysis.analysis.portions}`,
-        calorias_est: parseFloat(analysis.analysis.calories) || null,
-        proteinas_g: parseFloat(analysis.analysis.macros.protein) || null,
-        carbohidratos_g: parseFloat(analysis.analysis.macros.carbs) || null,
-        grasas_g: parseFloat(analysis.analysis.macros.fatsTotal) || null,
-    });
+        calorias_est: parseNumberOrNull(analysis.analysis.calories) ?? null,
+        proteinas_g: parseNumberOrNull(analysis.analysis.macros.protein) ?? null,
+        carbohidratos_g: parseNumberOrNull(analysis.analysis.macros.carbs) ?? null,
+        grasas_g: parseNumberOrNull(analysis.analysis.macros.fatsTotal) ?? null,
+    }).select('id').single();
     if (error) throw new Error(getErrorMessage(error));
 
     await logUserAction(uid, 'nutrition_log_created', 'Se ha guardado un nuevo análisis nutricional.');
+    return data?.id || analysis.id;
 };
 
 export const getNutritionLogs = async (uid: string): Promise<NutritionalAnalysis[]> => {
@@ -561,6 +782,65 @@ export const getNutritionLogs = async (uid: string): Promise<NutritionalAnalysis
     });
 };
 
+export const updateNutritionLog = async (
+    logId: string,
+    userId: string,
+    updates: NutritionLogUpdates,
+): Promise<void> => {
+    if (isDemo) return;
+
+    const { data: existingLog, error: existingError } = await supabase
+        .from('nutrition_logs')
+        .select('*')
+        .eq('id', logId)
+        .eq('user_id', userId)
+        .maybeSingle();
+
+    if (existingError) throw new Error(getErrorMessage(existingError));
+    if (!existingLog) throw new Error('No se encontró el registro nutricional a corregir.');
+
+    const dbUpdates = mapNutritionUpdatesToDb(updates, existingLog.comida_descripcion || '');
+    if (Object.keys(dbUpdates).length === 0) return;
+
+    const { error } = await supabase
+        .from('nutrition_logs')
+        .update(dbUpdates)
+        .eq('id', logId)
+        .eq('user_id', userId);
+
+    if (error) throw new Error(getErrorMessage(error));
+
+    const changedEntries = Object.entries(dbUpdates).filter(([key, newValue]) => serializeAuditValue(existingLog[key]) !== serializeAuditValue(newValue));
+    await Promise.all(
+        changedEntries.map(([key, newValue]) => auditNutritionLogChange(logId, userId, key, existingLog[key], newValue)),
+    );
+
+    await logUserAction(userId, 'nutrition_log_updated', `Registro nutricional corregido: ${logId}.`);
+};
+
+export const deleteNutritionLog = async (logId: string, userId: string): Promise<void> => {
+    if (isDemo) return;
+
+    const { data: existingLog, error: existingError } = await supabase
+        .from('nutrition_logs')
+        .select('id')
+        .eq('id', logId)
+        .eq('user_id', userId)
+        .maybeSingle();
+
+    if (existingError) throw new Error(getErrorMessage(existingError));
+    if (!existingLog) throw new Error('No se encontró el registro nutricional a eliminar.');
+
+    const { error } = await supabase
+        .from('nutrition_logs')
+        .delete()
+        .eq('id', logId)
+        .eq('user_id', userId);
+
+    if (error) throw new Error(getErrorMessage(error));
+    await logUserAction(userId, 'nutrition_log_deleted', `Registro nutricional eliminado: ${logId}.`);
+};
+
 export const uploadFile = async (bucket: string, file: File): Promise<string> => {
     if (isDemo) return URL.createObjectURL(file);
 
@@ -576,27 +856,59 @@ export const uploadFile = async (bucket: string, file: File): Promise<string> =>
     return data.publicUrl;
 };
 
-export const saveClinicalReport = async (uid: string, analysis: ClinicalAnalysis): Promise<void> => {
-    if (isDemo) return;
+type ClinicalReportUpdates = {
+    summary?: string;
+    biomarkers?: Partial<Biomarkers>;
+};
 
-    const { error } = await supabase.from('clinical_reports').insert({
+const CLINICAL_BIOMARKER_DB_FIELDS: Array<{ key: keyof Biomarkers; dbField: string }> = [
+    { key: 'hemoglobin', dbField: 'hemoglobina' },
+    { key: 'albumin', dbField: 'albumina' },
+    { key: 'vitaminD', dbField: 'vitamina_d_25_oh' },
+    { key: 'glucoseFasting', dbField: 'glucosa' },
+    { key: 'creatinine', dbField: 'creatinina' },
+    { key: 'crp', dbField: 'pcr' },
+    { key: 'sodium', dbField: 'sodio' },
+    { key: 'tsh', dbField: 'tsh' },
+    { key: 'vitaminB12', dbField: 'vitamina_b12' },
+];
+
+const mapClinicalUpdatesToDb = (updates: ClinicalReportUpdates) => {
+    const dbUpdates: Record<string, any> = {};
+    if (updates.summary !== undefined) dbUpdates.resumen_ia = updates.summary;
+
+    CLINICAL_BIOMARKER_DB_FIELDS.forEach(({ key, dbField }) => {
+        const value = updates.biomarkers?.[key];
+        if (value !== undefined) {
+            dbUpdates[dbField] = parseNumberOrNull(value) ?? null;
+        }
+    });
+
+    return dbUpdates;
+};
+
+export const saveClinicalReport = async (uid: string, analysis: ClinicalAnalysis): Promise<string> => {
+    if (isDemo) return analysis.id;
+
+    const { data, error } = await supabase.from('clinical_reports').insert({
         user_id: uid,
         file_name: analysis.fileName,
         resumen_ia: analysis.analysis.summary,
-        hemoglobina: parseFloat(analysis.analysis.biomarkers.hemoglobin) || null,
-        albumina: parseFloat(analysis.analysis.biomarkers.albumin) || null,
-        vitamina_d_25_oh: parseFloat(analysis.analysis.biomarkers.vitaminD) || null,
-        glucosa: parseFloat(analysis.analysis.biomarkers.glucoseFasting) || null,
-        creatinina: parseFloat(analysis.analysis.biomarkers.creatinine) || null,
-        pcr: parseFloat(analysis.analysis.biomarkers.crp) || null,
-        sodio: parseFloat(analysis.analysis.biomarkers.sodium) || null,
-        tsh: parseFloat(analysis.analysis.biomarkers.tsh) || null,
-        vitamina_b12: parseFloat(analysis.analysis.biomarkers.vitaminB12) || null,
+        hemoglobina: parseNumberOrNull(analysis.analysis.biomarkers.hemoglobin) ?? null,
+        albumina: parseNumberOrNull(analysis.analysis.biomarkers.albumin) ?? null,
+        vitamina_d_25_oh: parseNumberOrNull(analysis.analysis.biomarkers.vitaminD) ?? null,
+        glucosa: parseNumberOrNull(analysis.analysis.biomarkers.glucoseFasting) ?? null,
+        creatinina: parseNumberOrNull(analysis.analysis.biomarkers.creatinine) ?? null,
+        pcr: parseNumberOrNull(analysis.analysis.biomarkers.crp) ?? null,
+        sodio: parseNumberOrNull(analysis.analysis.biomarkers.sodium) ?? null,
+        tsh: parseNumberOrNull(analysis.analysis.biomarkers.tsh) ?? null,
+        vitamina_b12: parseNumberOrNull(analysis.analysis.biomarkers.vitaminB12) ?? null,
         created_at: analysis.createdAt,
-    });
+    }).select('id').single();
     if (error) throw new Error(getErrorMessage(error));
 
     await logUserAction(uid, 'clinical_report_created', `Se ha guardado el informe ${analysis.fileName}.`);
+    return data?.id || analysis.id;
 };
 
 export const getClinicalReports = async (uid: string): Promise<ClinicalAnalysis[]> => {
@@ -627,6 +939,65 @@ export const getClinicalReports = async (uid: string): Promise<ClinicalAnalysis[
             },
         },
     }));
+};
+
+export const updateClinicalReport = async (
+    reportId: string,
+    userId: string,
+    updates: ClinicalReportUpdates,
+): Promise<void> => {
+    if (isDemo) return;
+
+    const { data: existingReport, error: existingError } = await supabase
+        .from('clinical_reports')
+        .select('*')
+        .eq('id', reportId)
+        .eq('user_id', userId)
+        .maybeSingle();
+
+    if (existingError) throw new Error(getErrorMessage(existingError));
+    if (!existingReport) throw new Error('No se encontró el informe clínico a corregir.');
+
+    const dbUpdates = mapClinicalUpdatesToDb(updates);
+    if (Object.keys(dbUpdates).length === 0) return;
+
+    const { error } = await supabase
+        .from('clinical_reports')
+        .update(dbUpdates)
+        .eq('id', reportId)
+        .eq('user_id', userId);
+
+    if (error) throw new Error(getErrorMessage(error));
+
+    const changedEntries = Object.entries(dbUpdates).filter(([key, newValue]) => serializeAuditValue(existingReport[key]) !== serializeAuditValue(newValue));
+    await Promise.all(
+        changedEntries.map(([key, newValue]) => auditClinicalReportChange(reportId, userId, key, existingReport[key], newValue)),
+    );
+
+    await logUserAction(userId, 'clinical_report_updated', `Informe clínico corregido: ${reportId}.`);
+};
+
+export const deleteClinicalReport = async (reportId: string, userId: string): Promise<void> => {
+    if (isDemo) return;
+
+    const { data: existingReport, error: existingError } = await supabase
+        .from('clinical_reports')
+        .select('id, file_name')
+        .eq('id', reportId)
+        .eq('user_id', userId)
+        .maybeSingle();
+
+    if (existingError) throw new Error(getErrorMessage(existingError));
+    if (!existingReport) throw new Error('No se encontró el informe clínico a eliminar.');
+
+    const { error } = await supabase
+        .from('clinical_reports')
+        .delete()
+        .eq('id', reportId)
+        .eq('user_id', userId);
+
+    if (error) throw new Error(getErrorMessage(error));
+    await logUserAction(userId, 'clinical_report_deleted', `Informe clínico eliminado: ${existingReport.file_name || reportId}.`);
 };
 
 export const getAdminUsers = async (): Promise<AdminUserSummary[]> => {

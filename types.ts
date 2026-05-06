@@ -23,6 +23,20 @@ export interface VigsScore {
   index?: number; // El valor decimal (0.00 - 1.00)
 }
 
+export interface VigsAssessmentRecord {
+  id: string;
+  userId: string;
+  score: number;
+  category: VigsCategory;
+  index: number;
+  createdAt: Date;
+}
+
+export interface VigsAssessmentAnswer {
+  questionKey: string;
+  answerValue: number;
+}
+
 export interface Alert {
   id: number;
   type: 'info' | 'warning' | 'success' | 'danger';

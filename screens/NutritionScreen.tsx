@@ -3,10 +3,18 @@ import React, { useState, useContext } from 'react';
 import { AppContext } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
 import { AI_NOT_CONFIGURED_MESSAGE, analyzeFoodPhoto } from '../services/geminiService';
-import { saveNutritionLog, uploadFile } from '../services/dbService';
+import { deleteNutritionLog, saveNutritionLog, updateNutritionLog, uploadFile } from '../services/dbService';
 import { UploadIcon, CheckCircleIcon } from '../components/Icons';
 import AnalysisDisplay from '../components/AnalysisDisplay';
-import type { NutritionalAnalysisResult } from '../types';
+import type { NutritionalAnalysis, NutritionalAnalysisResult } from '../types';
+
+type NutritionEditForm = {
+    calories: string;
+    protein: string;
+    carbs: string;
+    fatsTotal: string;
+    portions: string;
+};
 
 const LoadingSpinner = ({ message }: { message: string }) => (
     <div className="flex flex-col justify-center items-center p-12 text-center bg-brand-gray-50 rounded-3xl shadow-inner">
@@ -26,6 +34,9 @@ const NutritionScreen: React.FC<{ isAiEnabled: boolean; onConfigureAi: () => Pro
     const [loadingMessage, setLoadingMessage] = useState("");
     const [error, setError] = useState<string | null>(null);
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
+    const [editingNutritionId, setEditingNutritionId] = useState<string | null>(null);
+    const [nutritionEditForm, setNutritionEditForm] = useState<NutritionEditForm | null>(null);
+    const [isUpdatingNutrition, setIsUpdatingNutrition] = useState(false);
 
 
     const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -65,8 +76,8 @@ const NutritionScreen: React.FC<{ isAiEnabled: boolean; onConfigureAi: () => Pro
                 createdAt: new Date(),
             };
 
-            await saveNutritionLog(user.uid, newAnalysis);
-            setNutritionalAnalyses(prev => [newAnalysis, ...prev]);
+            const savedId = await saveNutritionLog(user.uid, newAnalysis);
+            setNutritionalAnalyses(prev => [{ ...newAnalysis, id: savedId }, ...prev]);
 
             setSelectedFile(null);
             setImagePreview(null);
@@ -86,6 +97,79 @@ const NutritionScreen: React.FC<{ isAiEnabled: boolean; onConfigureAi: () => Pro
             }
         } finally {
             setIsLoading(false);
+        }
+    };
+
+    const handleStartNutritionEdit = (item: NutritionalAnalysis) => {
+        setEditingNutritionId(item.id);
+        setNutritionEditForm({
+            calories: item.analysis.calories || '',
+            protein: item.analysis.macros.protein || '',
+            carbs: item.analysis.macros.carbs || '',
+            fatsTotal: item.analysis.macros.fatsTotal || '',
+            portions: item.analysis.portions || '',
+        });
+        setError(null);
+        setSuccessMessage(null);
+    };
+
+    const handleSaveNutritionEdit = async (item: NutritionalAnalysis) => {
+        if (!user || !nutritionEditForm) return;
+        setIsUpdatingNutrition(true);
+        setError(null);
+        setSuccessMessage(null);
+
+        try {
+            await updateNutritionLog(item.id, user.uid, nutritionEditForm);
+            setNutritionalAnalyses(prev => prev.map(log => log.id === item.id ? {
+                ...log,
+                analysis: {
+                    ...log.analysis,
+                    calories: nutritionEditForm.calories,
+                    macros: {
+                        ...log.analysis.macros,
+                        protein: nutritionEditForm.protein,
+                        carbs: nutritionEditForm.carbs,
+                        fatsTotal: nutritionEditForm.fatsTotal,
+                    },
+                    portions: nutritionEditForm.portions,
+                },
+            } : log));
+            setEditingNutritionId(null);
+            setNutritionEditForm(null);
+            setSuccessMessage('Registro nutricional corregido correctamente.');
+            setTimeout(() => setSuccessMessage(null), 3000);
+        } catch (err: any) {
+            console.error('[NUTRITION UPDATE ERROR]', err);
+            setError(err.message || 'No se pudo corregir el registro nutricional.');
+        } finally {
+            setIsUpdatingNutrition(false);
+        }
+    };
+
+    const handleDeleteNutritionLog = async (item: NutritionalAnalysis) => {
+        if (!user) return;
+        const shouldDelete = window.confirm('¿Eliminar este registro nutricional? Esta acción no borra otros datos del paciente.');
+        if (!shouldDelete) return;
+
+        setIsUpdatingNutrition(true);
+        setError(null);
+        setSuccessMessage(null);
+
+        try {
+            await deleteNutritionLog(item.id, user.uid);
+            setNutritionalAnalyses(prev => prev.filter(log => log.id !== item.id));
+            if (editingNutritionId === item.id) {
+                setEditingNutritionId(null);
+                setNutritionEditForm(null);
+            }
+            setSuccessMessage('Registro nutricional eliminado correctamente.');
+            setTimeout(() => setSuccessMessage(null), 3000);
+        } catch (err: any) {
+            console.error('[NUTRITION DELETE ERROR]', err);
+            setError(err.message || 'No se pudo eliminar el registro nutricional.');
+        } finally {
+            setIsUpdatingNutrition(false);
         }
     };
     
@@ -165,9 +249,88 @@ const NutritionScreen: React.FC<{ isAiEnabled: boolean; onConfigureAi: () => Pro
                                <div className="mt-6 text-center">
                                     <p className="text-[11px] font-black text-brand-gray-400 uppercase tracking-widest">{item.createdAt.toLocaleDateString('es-ES', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
                                     <p className="text-xs font-bold text-brand-gray-500 mt-1 uppercase tracking-widest opacity-60">{item.createdAt.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}</p>
+                                    <div className="mt-5 flex flex-col gap-2">
+                                        <button
+                                            onClick={() => handleStartNutritionEdit(item)}
+                                            disabled={isUpdatingNutrition}
+                                            className="w-full px-4 py-3 rounded-xl bg-brand-lightblue text-brand-blue text-[10px] font-black uppercase tracking-wider disabled:opacity-50"
+                                        >
+                                            Corregir datos
+                                        </button>
+                                        <button
+                                            onClick={() => handleDeleteNutritionLog(item)}
+                                            disabled={isUpdatingNutrition}
+                                            className="w-full px-4 py-3 rounded-xl bg-brand-soft-red text-brand-red text-[10px] font-black uppercase tracking-wider disabled:opacity-50"
+                                        >
+                                            Eliminar registro
+                                        </button>
+                                    </div>
                                </div>
                             </div>
                             <div className="flex-1">
+                                {editingNutritionId === item.id && nutritionEditForm && (
+                                    <div className="mb-8 p-6 rounded-2xl bg-brand-gray-50 border border-brand-gray-100 animate-fade-in">
+                                        <h4 className="text-[11px] font-black text-brand-gray-400 uppercase tracking-[0.25em] mb-4">Corrección nutricional</h4>
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                            <label className="block">
+                                                <span className="block text-[10px] font-black text-brand-gray-400 uppercase tracking-widest mb-1">Calorías</span>
+                                                <input
+                                                    value={nutritionEditForm.calories}
+                                                    onChange={(event) => setNutritionEditForm(prev => prev ? { ...prev, calories: event.target.value } : prev)}
+                                                    className="w-full p-3 rounded-xl bg-white border border-brand-gray-100 text-sm font-bold text-brand-gray-800 outline-none focus:border-brand-blue"
+                                                />
+                                            </label>
+                                            <label className="block">
+                                                <span className="block text-[10px] font-black text-brand-gray-400 uppercase tracking-widest mb-1">Proteínas</span>
+                                                <input
+                                                    value={nutritionEditForm.protein}
+                                                    onChange={(event) => setNutritionEditForm(prev => prev ? { ...prev, protein: event.target.value } : prev)}
+                                                    className="w-full p-3 rounded-xl bg-white border border-brand-gray-100 text-sm font-bold text-brand-gray-800 outline-none focus:border-brand-blue"
+                                                />
+                                            </label>
+                                            <label className="block">
+                                                <span className="block text-[10px] font-black text-brand-gray-400 uppercase tracking-widest mb-1">Carbohidratos</span>
+                                                <input
+                                                    value={nutritionEditForm.carbs}
+                                                    onChange={(event) => setNutritionEditForm(prev => prev ? { ...prev, carbs: event.target.value } : prev)}
+                                                    className="w-full p-3 rounded-xl bg-white border border-brand-gray-100 text-sm font-bold text-brand-gray-800 outline-none focus:border-brand-blue"
+                                                />
+                                            </label>
+                                            <label className="block">
+                                                <span className="block text-[10px] font-black text-brand-gray-400 uppercase tracking-widest mb-1">Grasas</span>
+                                                <input
+                                                    value={nutritionEditForm.fatsTotal}
+                                                    onChange={(event) => setNutritionEditForm(prev => prev ? { ...prev, fatsTotal: event.target.value } : prev)}
+                                                    className="w-full p-3 rounded-xl bg-white border border-brand-gray-100 text-sm font-bold text-brand-gray-800 outline-none focus:border-brand-blue"
+                                                />
+                                            </label>
+                                        </div>
+                                        <label className="block mt-4">
+                                            <span className="block text-[10px] font-black text-brand-gray-400 uppercase tracking-widest mb-1">Descripción</span>
+                                            <textarea
+                                                value={nutritionEditForm.portions}
+                                                onChange={(event) => setNutritionEditForm(prev => prev ? { ...prev, portions: event.target.value } : prev)}
+                                                className="w-full min-h-28 p-4 rounded-xl bg-white border border-brand-gray-100 text-sm font-medium text-brand-gray-800 outline-none focus:border-brand-blue"
+                                            />
+                                        </label>
+                                        <div className="flex flex-col sm:flex-row gap-3 mt-6">
+                                            <button
+                                                onClick={() => handleSaveNutritionEdit(item)}
+                                                disabled={isUpdatingNutrition}
+                                                className="flex-1 py-3 rounded-xl bg-brand-blue text-white font-black text-[10px] uppercase tracking-widest disabled:opacity-50"
+                                            >
+                                                Guardar corrección
+                                            </button>
+                                            <button
+                                                onClick={() => { setEditingNutritionId(null); setNutritionEditForm(null); }}
+                                                disabled={isUpdatingNutrition}
+                                                className="flex-1 py-3 rounded-xl bg-white text-brand-gray-500 font-black text-[10px] uppercase tracking-widest border border-brand-gray-100 disabled:opacity-50"
+                                            >
+                                                Cancelar
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
                                 <AnalysisDisplay analysis={item.analysis} type="nutrition" />
                             </div>
                         </div>

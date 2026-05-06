@@ -1,10 +1,10 @@
 
-import React, { useState, useContext } from 'react';
+import React, { useState, useContext, useEffect } from 'react';
 import { AppContext } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
-import { saveVigsAssessment, updateUserProfile } from '../services/dbService';
+import { getVigsAssessmentAnswers, getVigsAssessments, saveVigsAssessment, updateUserProfile, updateVigsAssessment } from '../services/dbService';
 import { CheckCircleIcon } from '../components/Icons';
-import type { VigsScore, VigsCategory } from '../types';
+import type { VigsAssessmentRecord, VigsScore, VigsCategory } from '../types';
 
 const VIGS_CATEGORIES = {
   FUNCIONAL: {
@@ -127,42 +127,91 @@ const FrailtyScreen: React.FC = () => {
     const { setVigsScore, setAlerts } = context!;
     
     const [vigsAnswers, setVigsAnswers] = useState<Record<string, number>>(getInitialVigsAnswers);
+    const [vigsHistory, setVigsHistory] = useState<VigsAssessmentRecord[]>([]);
+    const [editingAssessmentId, setEditingAssessmentId] = useState<string | null>(null);
+    const [isLoadingHistory, setIsLoadingHistory] = useState(false);
     const [isSavingVigs, setIsSavingVigs] = useState(false);
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
+    const isEditingVigs = Boolean(editingAssessmentId);
+
+    const loadVigsHistory = async () => {
+        if (!user) return;
+        setIsLoadingHistory(true);
+        try {
+            const history = await getVigsAssessments(user.uid);
+            setVigsHistory(history);
+        } catch (error) {
+            console.error('Error loading VIG history:', error);
+        } finally {
+            setIsLoadingHistory(false);
+        }
+    };
+
+    useEffect(() => {
+        void loadVigsHistory();
+    }, [user]);
 
     const handleVigsChange = (id: string, value: number) => {
         setVigsAnswers(prev => ({ ...prev, [id]: value }));
+    };
+
+    const handleStartCorrection = async (assessment: VigsAssessmentRecord) => {
+        setIsSavingVigs(true);
+        setSuccessMessage(null);
+        try {
+            const previousAnswers = await getVigsAssessmentAnswers(assessment.id);
+            setVigsAnswers({ ...getInitialVigsAnswers(), ...previousAnswers });
+            setEditingAssessmentId(assessment.id);
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        } catch (error) {
+            console.error('Error loading VIG answers:', error);
+            alert('No se pudieron cargar las respuestas anteriores de esta evaluación.');
+        } finally {
+            setIsSavingVigs(false);
+        }
+    };
+
+    const handleCancelCorrection = () => {
+        setEditingAssessmentId(null);
+        setVigsAnswers(getInitialVigsAnswers());
+        setSuccessMessage(null);
     };
 
     const handleSaveVigs = async () => {
         if (!user) return;
         setIsSavingVigs(true);
         setSuccessMessage(null);
-        const newVigs = calculateVigsScore(vigsAnswers);
+        let newVigs = calculateVigsScore(vigsAnswers);
         
         try {
-            // Guardar test completo en vigs_assessments
-            await saveVigsAssessment(user.uid, vigsAnswers);
+            if (editingAssessmentId) {
+                newVigs = await updateVigsAssessment(editingAssessmentId, user.uid, vigsAnswers);
+            } else {
+                // Guardar test completo en vigs_assessments
+                await saveVigsAssessment(user.uid, vigsAnswers);
+            }
 
             // Actualizar contexto local (puntuación resumen e índice)
             setVigsScore(newVigs);
 
             const newAlerts = [
-                { id: Date.now(), type: 'success' as const, title: 'Cuestionario Guardado', message: `Su puntuación VIGS se ha actualizado a ${newVigs.score} (${newVigs.category}). Índice: ${newVigs.index?.toFixed(2)}` },
+                { id: Date.now(), type: 'success' as const, title: isEditingVigs ? 'Cuestionario Corregido' : 'Cuestionario Guardado', message: `Su puntuación VIGS se ha actualizado a ${newVigs.score} (${newVigs.category}). Índice: ${newVigs.index?.toFixed(2)}` },
                 ...context!.alerts.filter(a => a.type !== 'success'),
             ];
             setAlerts(newAlerts);
 
             // Actualizar alertas en perfil de usuario
             await updateUserProfile(user.uid, { alerts: newAlerts });
+            await loadVigsHistory();
+            setEditingAssessmentId(null);
             
-            setSuccessMessage('Los datos se han guardado correctamente.');
+            setSuccessMessage(isEditingVigs ? 'La corrección se ha guardado correctamente.' : 'Los datos se han guardado correctamente.');
             setTimeout(() => setSuccessMessage(null), 3000);
 
         } catch (error) {
             console.error("Error saving VIGS score:", error);
-            alert("Hubo un error al guardar la puntuación. Asegúrese de haber ejecutado el SQL de la nueva tabla.");
+            alert("Hubo un error al guardar la puntuación. Asegúrese de haber ejecutado el SQL de las tablas VIG.");
         } finally {
             setIsSavingVigs(false);
         }
@@ -212,6 +261,14 @@ const FrailtyScreen: React.FC = () => {
 
             <section className="bg-white p-6 rounded-2xl shadow-md">
                 <h2 className="text-2xl font-semibold text-brand-gray-700 mb-6">Cuestionario VIGS (Detallado)</h2>
+                {isEditingVigs && (
+                    <div className="mb-6 p-4 bg-brand-lightblue text-brand-blue rounded-xl border border-brand-blue/10 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                        <p className="font-bold">Modo corrección activo. Está editando una evaluación anterior.</p>
+                        <button onClick={handleCancelCorrection} className="px-4 py-2 bg-white rounded-lg font-bold text-sm shadow-sm">
+                            Cancelar corrección
+                        </button>
+                    </div>
+                )}
                 {Object.values(VIGS_CATEGORIES).map(category => (
                     <div key={category.title} className="mb-8">
                         <h3 className="text-2xl font-bold text-brand-gray-800 p-3 bg-brand-gray-100 rounded-lg mb-4">{category.title}</h3>
@@ -236,7 +293,7 @@ const FrailtyScreen: React.FC = () => {
                 disabled={isSavingVigs}
                 className="w-full mt-8 bg-brand-green text-white text-2xl font-bold py-5 px-6 rounded-2xl shadow-lg hover:bg-green-700 transition-colors disabled:bg-brand-gray-400 disabled:cursor-not-allowed"
             >
-                {isSavingVigs ? 'Guardando Cuestionario...' : 'Guardar y Calcular Puntuación'}
+                {isSavingVigs ? 'Guardando Cuestionario...' : isEditingVigs ? 'Guardar corrección' : 'Guardar y Calcular Puntuación'}
             </button>
             
              {successMessage && (
@@ -245,6 +302,42 @@ const FrailtyScreen: React.FC = () => {
                     <span className="ml-2 font-bold text-lg">{successMessage}</span>
                 </div>
             )}
+
+            <section className="mt-10 bg-white p-6 rounded-2xl shadow-md">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
+                    <div>
+                        <h2 className="text-2xl font-semibold text-brand-gray-700">Historial VIG</h2>
+                        <p className="text-brand-gray-500">Puede corregir una evaluación si detecta un dato introducido por error.</p>
+                    </div>
+                    {isLoadingHistory && <span className="text-sm font-bold text-brand-gray-400">Cargando...</span>}
+                </div>
+
+                {vigsHistory.length === 0 ? (
+                    <p className="p-6 bg-brand-gray-50 rounded-xl text-brand-gray-500 font-bold text-center">Todavía no hay evaluaciones VIG registradas.</p>
+                ) : (
+                    <div className="space-y-3">
+                        {vigsHistory.map((assessment) => (
+                            <div key={assessment.id} className="p-4 border border-brand-gray-100 rounded-xl flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                                <div>
+                                    <p className="font-bold text-brand-gray-800">
+                                        {assessment.createdAt.toLocaleDateString('es-ES', { year: 'numeric', month: 'long', day: 'numeric' })}
+                                    </p>
+                                    <p className="text-sm text-brand-gray-500">
+                                        {assessment.score} puntos · Índice {assessment.index.toFixed(2)} · {assessment.category}
+                                    </p>
+                                </div>
+                                <button
+                                    onClick={() => handleStartCorrection(assessment)}
+                                    disabled={isSavingVigs}
+                                    className="px-5 py-3 bg-brand-lightblue text-brand-blue rounded-xl font-bold disabled:opacity-50"
+                                >
+                                    Corregir
+                                </button>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </section>
         </div>
     );
 };

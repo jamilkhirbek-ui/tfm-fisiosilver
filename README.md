@@ -52,18 +52,21 @@ Se han aplicado cambios pequenos pero claros para que el proyecto encaje mejor c
    - consultar acciones registradas.
 
 5. Registro de acciones.
-   Se usa la tabla `user_action_log` para guardar acciones principales como login, logout, registros diarios, VIG y cambios administrativos.
+   Se usa la tabla `user_action_log` para guardar acciones principales como login, logout, registros diarios, VIG, correcciones, borrados y cambios administrativos.
 
 6. Auditoria sencilla.
-   Se anaden tablas de auditoria para usuario, diario y VIG. La app guarda cambios relevantes sin complicar demasiado la logica.
+   Se anaden tablas de auditoria para usuario, diario, VIG, informes clinicos y nutricion. La app guarda cambios relevantes sin complicar demasiado la logica.
 
-7. Modelo relacional mas defendible.
+7. Datos del paciente corregibles.
+   Perfil, diario, VIG, informes clinicos y nutricion pueden corregirse o eliminarse segun el caso. Las correcciones relevantes quedan auditadas y los borrados quedan registrados como accion.
+
+8. Modelo relacional mas defendible.
    La evaluacion VIG mantiene `vigs_assessments` para el resultado global y ahora tambien guarda respuestas en `assessment_answers`.
 
-8. IA como funcionalidad avanzada.
+9. IA como funcionalidad avanzada.
    La app ya no se bloquea por falta de clave de IA. Login, dashboard, diario y VIG siguen funcionando. Solo las funciones de IA muestran aviso de configuracion.
 
-9. Backend/API conceptual.
+10. Backend/API conceptual.
    Se mantiene `/api/groq` y se prepara `/api/gemini` para acercar el proyecto a una arquitectura con backend intermediario en Vercel.
 
 ## Modelo de datos resumido
@@ -80,6 +83,8 @@ Tablas principales:
 - `user_audit`
 - `daily_logs_audit`
 - `vigs_assessment_audit`
+- `clinical_reports_audit`
+- `nutrition_logs_audit`
 
 Relaciones clave:
 
@@ -98,6 +103,10 @@ Ejecuta este archivo en Supabase:
 Archivo de apoyo para explicar el esquema:
 
 - [database_schema.sql](/Users/m.jamilkhirbek/Documents/New%20project/Fisiosilver-main/database_schema.sql)
+
+Si se usan subidas de archivos en Supabase Storage, ejecuta tambien:
+
+- [supabase_storage_policies.sql](/Users/m.jamilkhirbek/Documents/New%20project/Fisiosilver-main/supabase_storage_policies.sql)
 
 ## Como crear un administrador
 
@@ -170,7 +179,10 @@ Flujo paciente:
 2. registrar constantes en Diario;
 3. corregir un registro anterior;
 4. completar VIG;
-5. consultar historial y dashboard.
+5. corregir una evaluacion VIG desde el historial;
+6. subir un informe clinico y corregir o eliminarlo si hay error;
+7. subir una foto de comida y corregir o eliminar el registro;
+8. consultar historial y dashboard.
 
 Flujo administrador:
 
@@ -186,3 +198,4 @@ Flujo administrador:
 - La IA sigue siendo una funcionalidad complementaria, no el nucleo del MVP.
 - La ruta `/api/gemini` mejora el planteamiento de backend, pero no sustituye una arquitectura sanitaria completa.
 - La auditoria es simple: suficiente para defender el TFM, no para un entorno clinico real.
+- Los buckets de Storage se mantienen publicos para no romper `getPublicUrl()`; en una version final seria mejor usar buckets privados y URLs firmadas desde backend.

@@ -147,3 +147,23 @@ create table public.vigs_assessment_audit (
   new_value text,
   modified_at timestamptz default now()
 );
+
+create table public.clinical_reports_audit (
+  id uuid primary key default gen_random_uuid(),
+  report_id uuid references public.clinical_reports(id),
+  modified_by uuid references public.users(id),
+  field_name text,
+  old_value text,
+  new_value text,
+  modified_at timestamptz default now()
+);
+
+create table public.nutrition_logs_audit (
+  id uuid primary key default gen_random_uuid(),
+  nutrition_log_id uuid references public.nutrition_logs(id),
+  modified_by uuid references public.users(id),
+  field_name text,
+  old_value text,
+  new_value text,
+  modified_at timestamptz default now()
+);

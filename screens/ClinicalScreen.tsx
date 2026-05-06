@@ -3,10 +3,27 @@ import React, { useState, useContext } from 'react';
 import { AppContext } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
 import { AI_NOT_CONFIGURED_MESSAGE, analyzeClinicalReport, analyzeClinicalText } from '../services/geminiService';
-import { saveClinicalReport, uploadFile } from '../services/dbService';
+import { deleteClinicalReport, saveClinicalReport, updateClinicalReport, uploadFile } from '../services/dbService';
 import { UploadIcon, CheckCircleIcon, LightBulbIcon, PencilSquareIcon, DocumentTextIcon } from '../components/Icons';
 import AnalysisDisplay from '../components/AnalysisDisplay';
-import type { ClinicalAnalysisResult } from '../types';
+import type { Biomarkers, ClinicalAnalysis, ClinicalAnalysisResult } from '../types';
+
+type ClinicalEditForm = {
+    summary: string;
+    biomarkers: Partial<Biomarkers>;
+};
+
+const CLINICAL_EDITABLE_BIOMARKERS: Array<{ key: keyof Biomarkers; label: string }> = [
+    { key: 'hemoglobin', label: 'Hemoglobina' },
+    { key: 'albumin', label: 'Albúmina' },
+    { key: 'vitaminD', label: 'Vitamina D' },
+    { key: 'glucoseFasting', label: 'Glucosa' },
+    { key: 'creatinine', label: 'Creatinina' },
+    { key: 'crp', label: 'PCR' },
+    { key: 'sodium', label: 'Sodio' },
+    { key: 'tsh', label: 'TSH' },
+    { key: 'vitaminB12', label: 'Vitamina B12' },
+];
 
 const ClinicalScreen: React.FC<{ isAiEnabled: boolean; onConfigureAi: () => Promise<void> | void }> = ({ isAiEnabled, onConfigureAi }) => {
     const context = useContext(AppContext);
@@ -19,6 +36,9 @@ const ClinicalScreen: React.FC<{ isAiEnabled: boolean; onConfigureAi: () => Prom
     const [loadingMessage, setLoadingMessage] = useState("");
     const [error, setError] = useState<string | null>(null);
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
+    const [editingReportId, setEditingReportId] = useState<string | null>(null);
+    const [clinicalEditForm, setClinicalEditForm] = useState<ClinicalEditForm | null>(null);
+    const [isUpdatingReport, setIsUpdatingReport] = useState(false);
 
     const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
         if (event.target.files && event.target.files[0]) {
@@ -52,8 +72,8 @@ const ClinicalScreen: React.FC<{ isAiEnabled: boolean; onConfigureAi: () => Prom
                 createdAt: new Date(),
             };
 
-            await saveClinicalReport(user.uid, newAnalysis);
-            setClinicalAnalyses(prev => [newAnalysis, ...prev]);
+            const savedId = await saveClinicalReport(user.uid, newAnalysis);
+            setClinicalAnalyses(prev => [{ ...newAnalysis, id: savedId }, ...prev]);
             
             setSelectedFile(null);
             setSuccessMessage('Informe clínico procesado correctamente.');
@@ -92,8 +112,8 @@ const ClinicalScreen: React.FC<{ isAiEnabled: boolean; onConfigureAi: () => Prom
                 createdAt: new Date(),
             };
 
-            await saveClinicalReport(user.uid, newAnalysis);
-            setClinicalAnalyses(prev => [newAnalysis, ...prev]);
+            const savedId = await saveClinicalReport(user.uid, newAnalysis);
+            setClinicalAnalyses(prev => [{ ...newAnalysis, id: savedId }, ...prev]);
             
             setManualText("");
             setIsManualEntry(false);
@@ -105,6 +125,88 @@ const ClinicalScreen: React.FC<{ isAiEnabled: boolean; onConfigureAi: () => Prom
             setError(err.message || "Error al procesar el texto.");
         } finally {
             setIsLoading(false);
+        }
+    };
+
+    const handleStartClinicalEdit = (item: ClinicalAnalysis) => {
+        const editableBiomarkers = CLINICAL_EDITABLE_BIOMARKERS.reduce<Partial<Biomarkers>>((values, field) => {
+            values[field.key] = item.analysis.biomarkers[field.key] || '';
+            return values;
+        }, {});
+
+        setEditingReportId(item.id);
+        setClinicalEditForm({
+            summary: item.analysis.summary || '',
+            biomarkers: editableBiomarkers,
+        });
+        setError(null);
+        setSuccessMessage(null);
+    };
+
+    const handleClinicalBiomarkerChange = (key: keyof Biomarkers, value: string) => {
+        setClinicalEditForm(prev => prev ? {
+            ...prev,
+            biomarkers: {
+                ...prev.biomarkers,
+                [key]: value,
+            },
+        } : prev);
+    };
+
+    const handleSaveClinicalEdit = async (item: ClinicalAnalysis) => {
+        if (!user || !clinicalEditForm) return;
+        setIsUpdatingReport(true);
+        setError(null);
+        setSuccessMessage(null);
+
+        try {
+            await updateClinicalReport(item.id, user.uid, clinicalEditForm);
+            setClinicalAnalyses(prev => prev.map(report => report.id === item.id ? {
+                ...report,
+                analysis: {
+                    ...report.analysis,
+                    summary: clinicalEditForm.summary,
+                    biomarkers: {
+                        ...report.analysis.biomarkers,
+                        ...clinicalEditForm.biomarkers,
+                    },
+                },
+            } : report));
+            setEditingReportId(null);
+            setClinicalEditForm(null);
+            setSuccessMessage('Informe clínico corregido correctamente.');
+            setTimeout(() => setSuccessMessage(null), 4000);
+        } catch (err: any) {
+            console.error(err);
+            setError(err.message || 'No se pudo corregir el informe.');
+        } finally {
+            setIsUpdatingReport(false);
+        }
+    };
+
+    const handleDeleteClinicalReport = async (item: ClinicalAnalysis) => {
+        if (!user) return;
+        const shouldDelete = window.confirm('¿Eliminar este informe clínico? Esta acción no borra otros datos del paciente.');
+        if (!shouldDelete) return;
+
+        setIsUpdatingReport(true);
+        setError(null);
+        setSuccessMessage(null);
+
+        try {
+            await deleteClinicalReport(item.id, user.uid);
+            setClinicalAnalyses(prev => prev.filter(report => report.id !== item.id));
+            if (editingReportId === item.id) {
+                setEditingReportId(null);
+                setClinicalEditForm(null);
+            }
+            setSuccessMessage('Informe clínico eliminado correctamente.');
+            setTimeout(() => setSuccessMessage(null), 4000);
+        } catch (err: any) {
+            console.error(err);
+            setError(err.message || 'No se pudo eliminar el informe.');
+        } finally {
+            setIsUpdatingReport(false);
         }
     };
 
@@ -255,11 +357,66 @@ const ClinicalScreen: React.FC<{ isAiEnabled: boolean; onConfigureAi: () => Prom
                                                     <p className="text-[10px] font-bold text-brand-gray-400 mt-2 uppercase tracking-widest">{item.createdAt.toLocaleDateString('es-ES', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
                                                 </div>
                                             </div>
-                                            <div className="flex items-center gap-2 bg-emerald-50 text-emerald-600 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider border border-emerald-100 shadow-sm">
-                                                <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                                                Interpretado por IA
+                                            <div className="flex flex-wrap gap-2">
+                                                <div className="flex items-center gap-2 bg-emerald-50 text-emerald-600 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider border border-emerald-100 shadow-sm">
+                                                    <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                                    Interpretado por IA
+                                                </div>
+                                                <button
+                                                    onClick={() => handleStartClinicalEdit(item)}
+                                                    disabled={isUpdatingReport}
+                                                    className="px-4 py-2 rounded-xl bg-brand-lightblue text-brand-blue text-[10px] font-black uppercase tracking-wider disabled:opacity-50"
+                                                >
+                                                    Corregir datos técnicos
+                                                </button>
+                                                <button
+                                                    onClick={() => handleDeleteClinicalReport(item)}
+                                                    disabled={isUpdatingReport}
+                                                    className="px-4 py-2 rounded-xl bg-brand-soft-red text-brand-red text-[10px] font-black uppercase tracking-wider disabled:opacity-50"
+                                                >
+                                                    Eliminar informe
+                                                </button>
                                             </div>
                                         </div>
+                                        {editingReportId === item.id && clinicalEditForm && (
+                                            <div className="mb-10 p-6 rounded-2xl bg-brand-gray-50 border border-brand-gray-100 animate-fade-in">
+                                                <h4 className="text-[11px] font-black text-brand-gray-400 uppercase tracking-[0.25em] mb-4">Corrección técnica</h4>
+                                                <label className="block text-xs font-black text-brand-gray-500 uppercase tracking-widest mb-2">Resumen</label>
+                                                <textarea
+                                                    value={clinicalEditForm.summary}
+                                                    onChange={(event) => setClinicalEditForm(prev => prev ? { ...prev, summary: event.target.value } : prev)}
+                                                    className="w-full min-h-28 p-4 rounded-xl bg-white border border-brand-gray-100 text-sm font-medium text-brand-gray-800 outline-none focus:border-brand-blue"
+                                                />
+                                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-5">
+                                                    {CLINICAL_EDITABLE_BIOMARKERS.map(field => (
+                                                        <label key={field.key} className="block">
+                                                            <span className="block text-[10px] font-black text-brand-gray-400 uppercase tracking-widest mb-1">{field.label}</span>
+                                                            <input
+                                                                value={clinicalEditForm.biomarkers[field.key] || ''}
+                                                                onChange={(event) => handleClinicalBiomarkerChange(field.key, event.target.value)}
+                                                                className="w-full p-3 rounded-xl bg-white border border-brand-gray-100 text-sm font-bold text-brand-gray-800 outline-none focus:border-brand-blue"
+                                                            />
+                                                        </label>
+                                                    ))}
+                                                </div>
+                                                <div className="flex flex-col sm:flex-row gap-3 mt-6">
+                                                    <button
+                                                        onClick={() => handleSaveClinicalEdit(item)}
+                                                        disabled={isUpdatingReport}
+                                                        className="flex-1 py-3 rounded-xl bg-brand-blue text-white font-black text-[10px] uppercase tracking-widest disabled:opacity-50"
+                                                    >
+                                                        Guardar corrección
+                                                    </button>
+                                                    <button
+                                                        onClick={() => { setEditingReportId(null); setClinicalEditForm(null); }}
+                                                        disabled={isUpdatingReport}
+                                                        className="flex-1 py-3 rounded-xl bg-white text-brand-gray-500 font-black text-[10px] uppercase tracking-widest border border-brand-gray-100 disabled:opacity-50"
+                                                    >
+                                                        Cancelar
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        )}
                                         <AnalysisDisplay analysis={item.analysis} type="clinical" />
                                     </div>
                                 </div>
