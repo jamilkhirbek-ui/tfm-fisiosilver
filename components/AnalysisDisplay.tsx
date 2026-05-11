@@ -72,23 +72,6 @@ const ClinicalDisplay: React.FC<{ analysis: ClinicalAnalysisResult }> = ({ analy
                     <Biomarker label="Vitamina D" value={biomarkers.vitaminD} />
                 </div>
             </Card>
-
-            <Card title="Recomendaciones" icon={<LightBulbIcon className="w-4 h-4" />}>
-                <div className="space-y-4">
-                    {analysis?.recommendations && Array.isArray(analysis.recommendations) ? (
-                        analysis.recommendations.map((r, i) => (
-                            <div key={i} className="flex gap-4 items-start p-4 bg-brand-lightblue rounded-xl border border-brand-blue/10">
-                                <div className="w-6 h-6 rounded-full bg-brand-blue text-white flex items-center justify-center text-[10px] font-black shrink-0">
-                                    {i + 1}
-                                </div>
-                                <p className="text-xs font-bold text-brand-blue leading-relaxed tracking-tight">{r}</p>
-                            </div>
-                        ))
-                    ) : (
-                        <p className="text-[10px] text-brand-gray-400 italic">No hay recomendaciones para esta analítica.</p>
-                    )}
-                </div>
-            </Card>
         </div>
     );
 };
