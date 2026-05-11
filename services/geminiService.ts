@@ -254,6 +254,52 @@ const callGemini = async (payload: object): Promise<any> => {
   throw new Error("Fallo en todas las claves de Gemini");
 };
 
+const callGeminiText = async (prompt: string): Promise<string> => {
+  const keys = getGeminiKeys();
+  if (keys.length === 0) throw new Error('No hay claves de Gemini configuradas');
+
+  let lastError: any = null;
+
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i];
+    try {
+      const response = await fetch('/api/gemini', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          apiKey: key,
+          model: GEMINI_MODEL,
+          payload: { contents: [{ parts: [{ text: prompt }] }] },
+        }),
+      });
+
+      const data = await response.json();
+      if (data.error) {
+        const code = data.error.code;
+        const msg = data.error.message || '';
+        console.warn(`[IA] Gemini texto clave ${i + 1}/${keys.length} → ${code}: ${msg}`);
+        lastError = new Error(msg || 'Error de Gemini');
+        continue;
+      }
+
+      const parts = data.candidates?.[0]?.content?.parts || [];
+      const text = parts.map((part: any) => part.text).filter(Boolean).join('\n').trim();
+      if (!text) {
+        lastError = new Error('Respuesta vacía de Gemini');
+        continue;
+      }
+
+      return text;
+    } catch (err) {
+      console.warn(`[IA] Fallo en Gemini texto clave ${i + 1}/${keys.length}:`, err);
+      lastError = err;
+      continue;
+    }
+  }
+
+  throw lastError || new Error('Fallo en todas las claves de Gemini');
+};
+
 // ═══════════════════════════════════════════════════════
 // UTILIDADES DE IMAGEN
 // ═══════════════════════════════════════════════════════
@@ -550,9 +596,15 @@ export const explainClinicalData = async (clinicalData: any): Promise<string> =>
         try {
             console.log("[IA] Explicación analítica → Groq (Fallback)...");
             return await callGroqText(prompt, false);
-        } catch (finalErr) {
-            console.error("[IA] Fallo crítico generando explicación analítica:", finalErr);
-            throw new Error("No se pudo generar la explicación IA.");
+        } catch (groqErr) {
+            console.warn("[IA] Groq falló en explicación analítica:", groqErr);
+            try {
+                console.log("[IA] Explicación analítica → Gemini (Fallback 2)...");
+                return await callGeminiText(prompt);
+            } catch (finalErr) {
+                console.error("[IA] Fallo crítico generando explicación analítica:", finalErr);
+                throw new Error("No se pudo generar la explicación IA.");
+            }
         }
     }
 };
