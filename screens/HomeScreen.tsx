@@ -208,6 +208,7 @@ const HomeScreen: React.FC = () => {
 
     const [dailySummary, setDailySummary] = useState<DailySummary | null>(null);
     const [isLoadingSummary, setIsLoadingSummary] = useState(false);
+    const [summaryError, setSummaryError] = useState<string | null>(null);
     const [clinicalExplanation, setClinicalExplanation] = useState<string | null>(null);
     const [isLoadingClinicalExp, setIsLoadingClinicalExp] = useState(false);
     const [dailyHistory, setDailyHistory] = useState<(HealthData & { createdAt: Date })[]>([]);
@@ -305,6 +306,7 @@ const HomeScreen: React.FC = () => {
     // Función manual para generar el resumen
     const handleGenerateSummary = useCallback(async () => {
         if (isLoadingSummary || isLoading || !profile || !user) return;
+        setSummaryError(null);
 
         // Generamos el hash actual para guardarlo junto al resumen
         const currentHash = [
@@ -355,11 +357,11 @@ const HomeScreen: React.FC = () => {
                 localStorage.setItem(`summaryHash_v2_${user.uid}`, `manual_${Date.now()}`);
                 localStorage.setItem(`dailySummary_v2_${user.uid}`, JSON.stringify(summary));
             } else {
-                setDailySummary({ greeting: `Hola, ${profile.displayName}`, narrative: 'Su seguimiento continúa activo. Recuerde registrar sus datos de hoy.', mood: 'okay', highlights: [], quickTip: 'Beba un vaso de agua ahora.' });
+                setSummaryError('No se pudo generar el resumen IA. Inténtalo de nuevo.');
             }
         } catch (e) {
             console.error('[SUMMARY ERROR]', e);
-            setDailySummary({ greeting: `Hola, ${profile.displayName}`, narrative: 'No se pudo conectar con el servicio de IA. Sus datos están guardados correctamente.', mood: 'okay', highlights: [], quickTip: 'Recuerde registrar sus constantes hoy.' });
+            setSummaryError('No se pudo generar el resumen IA. Inténtalo de nuevo.');
         } finally {
             setIsLoadingSummary(false);
         }
@@ -638,15 +640,16 @@ const HomeScreen: React.FC = () => {
                         <span className="text-[9px] font-black text-white/60 uppercase tracking-widest">IA Activa</span>
                     </div>
                     <h2 className="text-white text-3xl font-black tracking-tighter">
-                        {!hasRealData ? '¡Bienvenido a Fisiosilver!' : (isLoadingSummary ? 'Analizando tu salud...' : (dailySummary?.greeting || `Buenos días, ${profile?.displayName}`))}
+                        {!hasRealData ? '¡Bienvenido a Fisiosilver!' : (isLoadingSummary ? 'Analizando tu salud...' : (dailySummary?.greeting || 'Resumen IA pendiente'))}
                     </h2>
                     {!hasRealData ? (
                         <p className="text-white/80 text-base font-bold mt-3 leading-relaxed max-w-2xl">
                             Comience insertando sus datos de salud en el diario o subiendo una analítica para obtener feedback personalizado.
                         </p>
                     ) : (
-                        dailySummary && (
-                            <div className="space-y-4 mt-3">
+                        <div className="space-y-4 mt-3">
+                            {dailySummary ? (
+                                <>
                                 <p className="text-white/80 text-base font-bold leading-relaxed max-w-2xl">
                                     {dailySummary.narrative}
                                 </p>
@@ -661,18 +664,34 @@ const HomeScreen: React.FC = () => {
                                         </p>
                                     </div>
                                 )}
-                                <div className="pt-2">
-                                    <button 
-                                        onClick={handleGenerateSummary}
-                                        disabled={isLoadingSummary}
-                                        className={`flex items-center gap-2 px-4 py-2 rounded-xl bg-white/20 hover:bg-white/30 border border-white/30 transition-all active:scale-95 group/btn ${isLoadingSummary ? 'opacity-50 cursor-not-allowed' : ''}`}
-                                    >
-                                        <ArrowPathIcon className={`w-4 h-4 text-white ${isLoadingSummary ? 'animate-spin' : 'group-hover/btn:rotate-180 transition-transform duration-500'}`} />
-                                        <span className="text-[11px] font-black text-white uppercase tracking-widest">Actualizar mi informe de salud con IA</span>
-                                    </button>
+                                </>
+                            ) : (
+                                <p className="text-white/80 text-base font-bold leading-relaxed max-w-2xl">
+                                    Genera el resumen IA para ver tu estado general.
+                                </p>
+                            )}
+
+                            {summaryError && (
+                                <div className="bg-white/15 backdrop-blur-sm p-4 rounded-2xl border border-white/20 max-w-2xl animate-fade-in">
+                                    <p className="text-sm font-bold text-white leading-relaxed">
+                                        {summaryError}
+                                    </p>
                                 </div>
+                            )}
+
+                            <div className="pt-2">
+                                <button
+                                    onClick={handleGenerateSummary}
+                                    disabled={isLoadingSummary}
+                                    className={`flex items-center gap-2 px-4 py-2 rounded-xl bg-white/20 hover:bg-white/30 border border-white/30 transition-all active:scale-95 group/btn ${isLoadingSummary ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                >
+                                    <ArrowPathIcon className={`w-4 h-4 text-white ${isLoadingSummary ? 'animate-spin' : 'group-hover/btn:rotate-180 transition-transform duration-500'}`} />
+                                    <span className="text-[11px] font-black text-white uppercase tracking-widest">
+                                        {isLoadingSummary ? 'Generando resumen...' : dailySummary ? 'Actualizar mi informe de salud con IA' : 'Generar resumen IA'}
+                                    </span>
+                                </button>
                             </div>
-                        )
+                        </div>
                     )}
                 </div>
                 <div className="p-8 -mt-6 relative">
@@ -691,15 +710,15 @@ const HomeScreen: React.FC = () => {
                             <span className="text-3xl">{dailySummary?.mood === 'great' ? '😊' : dailySummary?.mood === 'good' ? '🙂' : dailySummary?.mood === 'okay' ? '😐' : dailySummary?.mood === 'watch' ? '⚠️' : '💙'}</span>
                             <div>
                                 <p className="text-[9px] font-black text-brand-gray-400 uppercase tracking-widest">Estado General</p>
-                                <p className="text-sm font-black text-brand-gray-900 capitalize">{dailySummary?.mood === 'great' ? 'Excelente' : dailySummary?.mood === 'good' ? 'Bien' : dailySummary?.mood === 'okay' ? 'Estable' : dailySummary?.mood === 'watch' ? 'Vigilar' : 'Cargando...'}</p>
+                                <p className="text-sm font-black text-brand-gray-900 capitalize">{dailySummary?.mood === 'great' ? 'Excelente' : dailySummary?.mood === 'good' ? 'Bien' : dailySummary?.mood === 'okay' ? 'Estable' : dailySummary?.mood === 'watch' ? 'Vigilar' : isLoadingSummary ? 'Generando...' : 'Resumen pendiente'}</p>
                             </div>
                         </div>
-                        {dailySummary?.quickTip && (
-                            <div className="flex-1 bg-brand-lightblue px-5 py-3 rounded-2xl flex items-center gap-3">
-                                <span className="text-xl">💡</span>
-                                <p className="text-sm font-bold text-brand-blue">{dailySummary.quickTip}</p>
-                            </div>
-                        )}
+                        <div className="flex-1 bg-brand-lightblue px-5 py-3 rounded-2xl flex items-center gap-3">
+                            <span className="text-xl">💡</span>
+                            <p className="text-sm font-bold text-brand-blue">
+                                {dailySummary?.quickTip || 'Genera el resumen IA para ver tu estado general.'}
+                            </p>
+                        </div>
                     </div>
                     {/* Highlights */}
                     {dailySummary?.highlights && dailySummary.highlights.length > 0 && (
