@@ -546,12 +546,13 @@ export const explainClinicalData = async (clinicalData: any): Promise<string> =>
         console.log("[IA] Explicación analítica → OpenRouter (Prioridad 1)...");
         return await callOpenRouter(prompt);
     } catch (e) {
+        console.warn("[IA] OpenRouter falló en explicación analítica:", e);
         try {
             console.log("[IA] Explicación analítica → Groq (Fallback)...");
             return await callGroqText(prompt, false);
         } catch (finalErr) {
-            console.error("Critical fallback failure:", finalErr);
-            return "No se ha podido generar la explicación en este momento (Límite de servicios alcanzado).";
+            console.error("[IA] Fallo crítico generando explicación analítica:", finalErr);
+            throw new Error("No se pudo generar la explicación IA.");
         }
     }
 };

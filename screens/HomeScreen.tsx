@@ -211,6 +211,7 @@ const HomeScreen: React.FC = () => {
     const [isLoadingSummary, setIsLoadingSummary] = useState(false);
     const [summaryError, setSummaryError] = useState<string | null>(null);
     const [clinicalExplanation, setClinicalExplanation] = useState<string | null>(null);
+    const [clinicalExplanationError, setClinicalExplanationError] = useState<string | null>(null);
     const [isLoadingClinicalExp, setIsLoadingClinicalExp] = useState(false);
     const [dailyHistory, setDailyHistory] = useState<(HealthData & { createdAt: Date })[]>([]);
 
@@ -519,12 +520,15 @@ const HomeScreen: React.FC = () => {
 
     const handleExplainClinical = useCallback(async () => {
         if (clinicalAnalyses.length === 0 || isLoadingClinicalExp) return;
+        setClinicalExplanationError(null);
+        setClinicalExplanation(null);
         setIsLoadingClinicalExp(true);
         try {
             const exp = await explainClinicalData(clinicalAnalyses[0].analysis.biomarkers);
             setClinicalExplanation(exp);
         } catch (e) {
             console.error("Error explaining clinical data:", e);
+            setClinicalExplanationError('No se pudo generar la explicación IA. Inténtalo de nuevo.');
         } finally {
             setIsLoadingClinicalExp(false);
         }
@@ -822,16 +826,14 @@ const HomeScreen: React.FC = () => {
                             })}
                         </div>
                         <div className="mt-5 border-t border-brand-gray-50 pt-4">
-                            {!clinicalExplanation ? (
-                                <button 
-                                    onClick={handleExplainClinical}
-                                    disabled={isLoadingClinicalExp}
-                                    className={`flex items-center gap-2 px-4 py-2 rounded-xl bg-brand-lightblue text-brand-blue border border-brand-blue/10 hover:bg-brand-blue hover:text-white transition-all text-[10px] font-black uppercase tracking-widest active:scale-95 ${isLoadingClinicalExp ? 'opacity-50 cursor-wait' : ''}`}
-                                >
-                                    <LightBulbIcon className={`w-4 h-4 ${isLoadingClinicalExp ? 'animate-pulse' : ''}`} />
-                                    {isLoadingClinicalExp ? 'IA Interpretando...' : 'Explicar mis resultados (IA)'}
-                                </button>
-                            ) : (
+                            {isLoadingClinicalExp ? (
+                                <div className="bg-brand-gray-50 p-6 rounded-2xl animate-fade-in border border-brand-gray-100">
+                                    <div className="flex items-center gap-2">
+                                        <LightBulbIcon className="w-4 h-4 text-brand-blue animate-pulse" />
+                                        <p className="text-[10px] font-black text-brand-blue uppercase tracking-widest">Generando explicación...</p>
+                                    </div>
+                                </div>
+                            ) : clinicalExplanation ? (
                                 <div className="bg-brand-gray-50 p-6 rounded-2xl animate-fade-in border border-brand-gray-100">
                                     <div className="flex items-center gap-2 mb-3">
                                         <div className="w-2 h-2 rounded-full bg-brand-blue" />
@@ -847,6 +849,28 @@ const HomeScreen: React.FC = () => {
                                         Cerrar explicación
                                     </button>
                                 </div>
+                            ) : clinicalExplanationError ? (
+                                <div className="bg-brand-soft-red p-6 rounded-2xl animate-fade-in border border-brand-red/10">
+                                    <p className="text-sm font-bold text-brand-red leading-relaxed">
+                                        {clinicalExplanationError}
+                                    </p>
+                                    <button
+                                        onClick={handleExplainClinical}
+                                        disabled={isLoadingClinicalExp}
+                                        className="mt-4 px-4 py-2 rounded-xl bg-white text-brand-red border border-brand-red/10 text-[10px] font-black uppercase tracking-widest hover:bg-brand-red hover:text-white transition-all disabled:opacity-50"
+                                    >
+                                        Intentar de nuevo
+                                    </button>
+                                </div>
+                            ) : (
+                                <button
+                                    onClick={handleExplainClinical}
+                                    disabled={isLoadingClinicalExp}
+                                    className={`flex items-center gap-2 px-4 py-2 rounded-xl bg-brand-lightblue text-brand-blue border border-brand-blue/10 hover:bg-brand-blue hover:text-white transition-all text-[10px] font-black uppercase tracking-widest active:scale-95 ${isLoadingClinicalExp ? 'opacity-50 cursor-wait' : ''}`}
+                                >
+                                    <LightBulbIcon className={`w-4 h-4 ${isLoadingClinicalExp ? 'animate-pulse' : ''}`} />
+                                    {isLoadingClinicalExp ? 'IA Interpretando...' : 'Explicar mis resultados (IA)'}
+                                </button>
                             )}
                         </div>
                     </div>
