@@ -29,6 +29,8 @@ const smokingOptions: { id: SmokingStatus; label: string }[] = [
     { id: 'Activo', label: 'Fumador' },
 ];
 
+const getSafeChallengePoints = (points: number): number => Math.min(50, Math.max(0, Number(points) || 0));
+
 const getVigsColorClass = (category: VigsCategory): string => {
   switch (category) {
     case 'No frágil': return 'text-emerald-600 bg-emerald-50 border-emerald-100';
@@ -502,15 +504,17 @@ const HomeScreen: React.FC = () => {
         const newChallenges = challenges.map(c => {
             if (c.id === challengeId) {
                 const isNowCompleted = !c.completed;
-                if (isNowCompleted) {
-                    const totalPoints = (profile.points || 0) + c.points;
+                if (isNowCompleted && !c.xpAwarded) {
+                    const awardedPoints = getSafeChallengePoints(c.points);
+                    const totalPoints = (profile.points || 0) + awardedPoints;
                     const newLevel = Math.floor(totalPoints / 500) + 1;
                     updateUserProfile(user.uid, { points: totalPoints, level: newLevel });
                     setProfile(prev => prev ? { ...prev, points: totalPoints, level: newLevel } : null);
-                    setSuccessMessage(`¡Excelente! +${c.points} puntos ganados.`);
+                    setSuccessMessage(`¡Excelente! +${awardedPoints} puntos ganados.`);
                     setTimeout(() => setSuccessMessage(null), 3000);
+                    return { ...c, completed: isNowCompleted, xpAwarded: true };
                 }
-                return { ...c, completed: isNowCompleted };
+                return { ...c, completed: isNowCompleted, xpAwarded: c.xpAwarded || !isNowCompleted };
             }
             return c;
         });
@@ -1060,7 +1064,7 @@ const HomeScreen: React.FC = () => {
                                 <div className="mt-auto flex justify-between items-center pt-4 border-t border-brand-gray-50">
                                     <div className="flex items-center gap-1.5">
                                         <SparklesIcon className={`w-3.5 h-3.5 ${challenge.completed ? 'text-brand-gray-300' : 'text-brand-blue'}`} />
-                                        <span className="text-[10px] font-black text-brand-gray-900">+{challenge.points} XP</span>
+                                        <span className="text-[10px] font-black text-brand-gray-900">+{getSafeChallengePoints(challenge.points)} XP</span>
                                     </div>
                                     <div className={`text-[9px] font-black uppercase tracking-widest ${challenge.completed ? 'text-brand-green' : 'text-brand-blue'}`}>
                                         {challenge.completed ? 'Completado' : 'Pulsa para completar'}

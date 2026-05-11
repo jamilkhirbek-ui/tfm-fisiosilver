@@ -147,6 +147,7 @@ export interface Challenge {
     description: string;
     points: number;
     completed: boolean;
+    xpAwarded?: boolean;
     category: 'nutrition' | 'activity' | 'vitals' | 'social';
     difficulty: 'fácil' | 'medio' | 'difícil';
 }
