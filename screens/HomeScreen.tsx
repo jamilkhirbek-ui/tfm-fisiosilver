@@ -204,6 +204,7 @@ const HomeScreen: React.FC = () => {
     const [detailHistory, setDetailHistory] = useState<ChartDataPoint[]>([]);
     const [challenges, setChallenges] = useState<Challenge[]>([]);
     const [isLoadingChallenges, setIsLoadingChallenges] = useState(false);
+    const [challengesError, setChallengesError] = useState<string | null>(null);
     const isRunningPredictionsRef = React.useRef(false);
 
     const [dailySummary, setDailySummary] = useState<DailySummary | null>(null);
@@ -480,6 +481,7 @@ const HomeScreen: React.FC = () => {
 
     const handleFetchChallenges = useCallback(async () => {
         if (!healthData || !vigsScore || !profile || !user || isLoadingChallenges) return;
+        setChallengesError(null);
         setIsLoadingChallenges(true);
         try {
             console.log("[IA] Solicitando retos semanales...");
@@ -488,6 +490,7 @@ const HomeScreen: React.FC = () => {
             localStorage.setItem(`challenges_v2_${user.uid}`, JSON.stringify(newChallenges));
         } catch (e) {
             console.error("Error fetching challenges:", e);
+            setChallengesError('No se pudieron generar los retos IA. Inténtalo de nuevo.');
         } finally {
             setIsLoadingChallenges(false);
         }
@@ -973,11 +976,27 @@ const HomeScreen: React.FC = () => {
                             'bg-white text-brand-blue hover:bg-brand-lightblue active:scale-95'
                         }`}
                     >
-                        {isLoadingChallenges ? 'Generando...' : (challenges.length > 0 ? 'Renovar Retos' : 'Activar Retos IA')}
+                        {isLoadingChallenges ? 'Generando retos...' : (challenges.length > 0 ? 'Renovar Retos' : 'Activar Retos IA')}
                     </button>
                 </div>
 
-                {challenges.length > 0 ? (
+                {isLoadingChallenges ? (
+                    <div className="bg-brand-gray-50 p-10 rounded-[2.5rem] border-2 border-dashed border-brand-gray-200 flex flex-col items-center text-center">
+                        <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center shadow-sm mb-4">
+                            <TrophyIcon className="w-8 h-8 text-brand-gray-200 animate-pulse" />
+                        </div>
+                        <h3 className="text-sm font-black text-brand-gray-400 uppercase tracking-widest mb-1">Generando retos...</h3>
+                        <p className="text-xs font-bold text-brand-gray-300 max-w-sm">La IA está preparando misiones semanales adaptadas a tus datos de salud.</p>
+                    </div>
+                ) : challengesError ? (
+                    <div className="bg-brand-soft-red p-10 rounded-[2.5rem] border-2 border-brand-red/10 flex flex-col items-center text-center">
+                        <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center shadow-sm mb-4">
+                            <TrophyIcon className="w-8 h-8 text-brand-red" />
+                        </div>
+                        <h3 className="text-sm font-black text-brand-red uppercase tracking-widest mb-1">No se pudieron generar los retos IA</h3>
+                        <p className="text-xs font-bold text-brand-red/70 max-w-sm">Inténtalo de nuevo.</p>
+                    </div>
+                ) : challenges.length > 0 ? (
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                         {challenges.map((challenge) => (
                             <button 
@@ -1036,7 +1055,7 @@ const HomeScreen: React.FC = () => {
                             <TrophyIcon className="w-8 h-8 text-brand-gray-200" />
                         </div>
                         <h3 className="text-sm font-black text-brand-gray-400 uppercase tracking-widest mb-1">Misiones no asignadas</h3>
-                        <p className="text-xs font-bold text-brand-gray-300 max-w-sm">Pulsa en "Activar Retos" para que la IA diseñe misiones semanales basadas en tus objetivos de salud.</p>
+                        <p className="text-xs font-bold text-brand-gray-300 max-w-sm">Pulsa Activar Retos IA para generarlas.</p>
                     </div>
                 )}
             </section>

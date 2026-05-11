@@ -408,27 +408,35 @@ export const generateWeeklyChallenges = async (healthData: HealthData, vigsScore
     ] 
   }`;
 
+  const parseChallengesResponse = (response: string, provider: string): Challenge[] => {
+    const parsed = JSON.parse(cleanJsonResponse(response));
+    if (!Array.isArray(parsed.challenges)) {
+      console.warn(`[IA] ${provider} devolvió JSON válido sin lista de retos.`);
+      return [];
+    }
+    return parsed.challenges;
+  };
+
   try {
     console.log("[IA] Generando retos semanales → OpenRouter (Prioridad 1)...");
     const res = await callOpenRouter(prompt);
-    const parsed = JSON.parse(cleanJsonResponse(res));
-    return parsed.challenges || [];
+    return parseChallengesResponse(res, "OpenRouter");
   } catch (e) {
+    console.warn("[IA] OpenRouter falló generando retos:", e);
     try {
-        console.log("[IA] Generando retos semanales → Groq (Fallback 1)...", e);
+        console.log("[IA] Generando retos semanales → Groq (Fallback 1)...");
         const res = await callGroqText(prompt);
-        const parsed = JSON.parse(cleanJsonResponse(res));
-        return parsed.challenges || [];
+        return parseChallengesResponse(res, "Groq");
     } catch (err) {
-        console.log("[IA] Generando retos semanales → Gemini (Fallback 2)...", err);
+        console.warn("[IA] Groq falló generando retos:", err);
+        console.log("[IA] Generando retos semanales → Gemini (Fallback 2)...");
         try {
             const res = await callGemini({ contents: [{ parts: [{ text: prompt }] }] });
-            const resText = res.candidates?.[0]?.content?.parts?.[0]?.text || "";
-            const parsed = JSON.parse(cleanJsonResponse(resText));
-            return parsed.challenges || [];
+            const resText = typeof res === 'string' ? res : JSON.stringify(res);
+            return parseChallengesResponse(resText, "Gemini");
         } catch (finalErr) {
-            console.error("[IA] Fallo crítico generando retos:", finalErr);
-            return [];
+            console.error("[IA] Fallo crítico generando retos en todos los proveedores:", finalErr);
+            throw new Error("No se pudieron generar los retos IA.");
         }
     }
   }
