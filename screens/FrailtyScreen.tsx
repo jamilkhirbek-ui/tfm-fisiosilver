@@ -121,11 +121,12 @@ const calculateVigsScore = (data: Record<string, number>): VigsScore => {
     return { score, category, index };
 };
 
-const FrailtyScreen: React.FC = () => {
+const FrailtyScreen: React.FC<{ onGoHome: () => void }> = ({ onGoHome }) => {
     const context = useContext(AppContext);
     const { user } = useAuth();
     const { setVigsScore, setAlerts } = context!;
     
+    const [showClinicalWarning, setShowClinicalWarning] = useState(true);
     const [vigsAnswers, setVigsAnswers] = useState<Record<string, number>>(getInitialVigsAnswers);
     const [vigsHistory, setVigsHistory] = useState<VigsAssessmentRecord[]>([]);
     const [editingAssessmentId, setEditingAssessmentId] = useState<string | null>(null);
@@ -254,6 +255,41 @@ const FrailtyScreen: React.FC = () => {
 
     return (
         <div className="p-4 sm:p-6">
+            {showClinicalWarning && (
+                <div className="fixed inset-0 z-50 bg-brand-gray-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+                    <div className="bg-white rounded-[2rem] shadow-premium-lg border border-brand-gray-100 max-w-2xl w-full p-8 sm:p-10 animate-scale-up">
+                        <div className="w-14 h-14 rounded-2xl bg-brand-lightblue text-brand-blue flex items-center justify-center mb-6">
+                            <CheckCircleIcon className="w-7 h-7" />
+                        </div>
+                        <h2 className="text-3xl font-black text-brand-gray-900 tracking-tight mb-4">
+                            Cuestionario clínico de fragilidad
+                        </h2>
+                        <div className="space-y-4 text-brand-gray-600 text-base sm:text-lg font-medium leading-relaxed">
+                            <p>
+                                Este cuestionario incluye preguntas clínicas y funcionales que pueden ser difíciles de interpretar sin ayuda profesional, como dependencia, memoria, medicación, enfermedades o síntomas relevantes.
+                            </p>
+                            <p>
+                                Para evitar errores, debe completarse junto a un profesional sanitario. El resultado es orientativo y no sustituye una valoración médica.
+                            </p>
+                        </div>
+                        <div className="mt-8 flex flex-col sm:flex-row gap-3">
+                            <button
+                                onClick={() => setShowClinicalWarning(false)}
+                                className="flex-1 bg-brand-blue text-white font-black py-4 px-5 rounded-2xl shadow-soft hover:shadow-premium transition-all uppercase tracking-widest text-[11px]"
+                            >
+                                Estoy con un profesional sanitario
+                            </button>
+                            <button
+                                onClick={onGoHome}
+                                className="flex-1 bg-brand-gray-50 text-brand-gray-600 font-black py-4 px-5 rounded-2xl border border-brand-gray-100 hover:bg-brand-soft-red hover:text-brand-red transition-all uppercase tracking-widest text-[11px]"
+                            >
+                                No estoy con un profesional sanitario
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             <header className="mb-8">
                 <h1 className="text-4xl font-bold text-brand-gray-800">Cuestionario de Fragilidad</h1>
                 <p className="text-xl text-brand-gray-600">Evalúe su nivel de fragilidad con el índice VIGS.</p>

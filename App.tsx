@@ -119,7 +119,7 @@ const MainApp: React.FC = () => {
     switch (activeTab) {
       case 'home': return <HomeScreen />;
       case 'diary': return <DiaryScreen />;
-      case 'frailty': return <FrailtyScreen />;
+      case 'frailty': return <FrailtyScreen onGoHome={() => setActiveTab('home')} />;
       case 'clinical': return <ClinicalScreen isAiEnabled={aiEnabled} onConfigureAi={handleOpenKeySelector} />;
       case 'nutrition': return <NutritionScreen isAiEnabled={aiEnabled} onConfigureAi={handleOpenKeySelector} />;
       case 'admin': return <AdminScreen />;
