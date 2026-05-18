@@ -34,7 +34,6 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
         uses: 1,
         expireTime,
         newSessionExpireTime,
-        liveConnectConstraints: { model },
         httpOptions: { apiVersion: 'v1alpha' },
       },
     });
@@ -43,7 +42,7 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
       return res.status(500).json({ error: { message: 'Gemini no devolvio token efimero', code: 500 } });
     }
 
-    return res.status(200).json({ token: token.name, model, expireTime });
+    return res.status(200).json({ token: token.name, model, expireTime, tokenSetupLocked: false });
   } catch (error: any) {
     if (process.env.NODE_ENV !== 'production') {
       console.error('[Gemini Live Token]', error);

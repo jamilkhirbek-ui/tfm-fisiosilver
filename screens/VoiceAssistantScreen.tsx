@@ -7,7 +7,7 @@ import { saveDailyLog } from '../services/dbService';
 
 type ConnectionState = 'idle' | 'connecting' | 'listening' | 'processing' | 'error';
 type ConversationItem = { speaker: 'system' | 'user'; text: string };
-type LiveTokenResponse = { token?: string; model?: string; error?: { message?: string } | string };
+type LiveTokenResponse = { token?: string; model?: string; tokenSetupLocked?: boolean; error?: { message?: string } | string };
 type StartMode = 'voice' | 'text';
 type LiveAudioBlob = { data: string; mimeType: string };
 type FunctionCall = { id?: string; name?: string; args?: Record<string, unknown> };
@@ -29,11 +29,35 @@ type RawLiveSession = {
   sendToolResponse: (params: { functionResponses: unknown }) => void;
   close: () => void;
 };
+type VoiceDiagnostics = {
+  model: string;
+  endpoint: string;
+  tokenSetupLocked: string;
+  wsOpen: boolean;
+  setupSent: boolean;
+  firstAudioChunkSent: boolean;
+  closeCode: string;
+  closeReason: string;
+  wasClean: string;
+  lastMessage: string;
+};
 
 const CONNECTION_TIMEOUT_MS = 12000;
 const INACTIVITY_TIMEOUT_MS = 120000;
 const LIVE_WS_URL = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained';
 const LIVE_SYSTEM_INSTRUCTION = 'Eres el asistente de FisioSilver. Responde de forma breve, clara y segura en español. Ayuda al usuario a registrar constantes medicas. Si te preguntan por comida, recuerdale que debe usar la camara en la seccion de Nutricion.';
+const INITIAL_DIAGNOSTICS: VoiceDiagnostics = {
+  model: 'Pendiente',
+  endpoint: 'Pendiente',
+  tokenSetupLocked: 'Pendiente',
+  wsOpen: false,
+  setupSent: false,
+  firstAudioChunkSent: false,
+  closeCode: '-',
+  closeReason: '-',
+  wasClean: '-',
+  lastMessage: '-',
+};
 
 function decode(base64: string): Uint8Array {
   const binaryString = atob(base64);
@@ -149,6 +173,18 @@ const createTextTurn = (text: string) => [{
 
 const buildSafeLiveUrlForLog = (token: string) => `${LIVE_WS_URL}?access_token=${maskToken(token)}`;
 
+const summarizeLiveMessage = (message: RawLiveServerMessage) => {
+  if (message.setupComplete) return 'setupComplete';
+  if (message.toolCall?.functionCalls?.length) return `toolCall:${message.toolCall.functionCalls.map((fc) => fc.name).join(',')}`;
+  if (message.serverContent?.inputTranscription) return `input:${message.serverContent.inputTranscription.text || ''}`.slice(0, 90);
+  if (message.serverContent?.outputTranscription) return `output:${message.serverContent.outputTranscription.text || ''}`.slice(0, 90);
+  if (message.serverContent?.modelTurn?.parts?.some((part) => part.inlineData?.data)) return 'audio';
+  if (message.serverContent?.modelTurn?.parts?.some((part) => part.text)) return `text:${message.serverContent.modelTurn.parts.map((part) => part.text || '').join('')}`.slice(0, 90);
+  if (message.serverContent?.turnComplete) return 'turnComplete';
+  if (message.serverContent?.generationComplete) return 'generationComplete';
+  return Object.keys(message).join(',') || 'mensaje vacio';
+};
+
 const createRawSession = (ws: WebSocket, onFirstAudioChunk: () => void): RawLiveSession => {
   const sendJson = (payload: object) => {
     if (ws.readyState !== WebSocket.OPEN) throw new Error('WebSocket no esta abierto');
@@ -194,6 +230,7 @@ const VoiceAssistantScreen: React.FC<{
   const [assistantPartial, setAssistantPartial] = useState('');
   const [textFallback, setTextFallback] = useState('');
   const [isTextFallbackEnabled, setIsTextFallbackEnabled] = useState(false);
+  const [diagnostics, setDiagnostics] = useState<VoiceDiagnostics>(INITIAL_DIAGNOSTICS);
 
   const sessionRef = useRef<RawLiveSession | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -293,7 +330,7 @@ const VoiceAssistantScreen: React.FC<{
     }, INACTIVITY_TIMEOUT_MS);
   }, [cleanupSession, clearInactivityTimer]);
 
-  const fetchLiveToken = async (): Promise<{ token: string; model: string }> => {
+  const fetchLiveToken = async (): Promise<{ token: string; model: string; tokenSetupLocked: boolean }> => {
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), CONNECTION_TIMEOUT_MS);
 
@@ -310,20 +347,28 @@ const VoiceAssistantScreen: React.FC<{
         throw new Error(message || 'No se pudo crear el token efimero de Gemini Live');
       }
 
-      return { token: data.token, model: data.model };
+      return { token: data.token, model: data.model, tokenSetupLocked: data.tokenSetupLocked ?? false };
     } finally {
       window.clearTimeout(timeout);
     }
   };
 
   const connectLiveSession = useCallback(async (mode: StartMode) => {
-    const { token, model } = await fetchLiveToken();
+    const { token, model, tokenSetupLocked } = await fetchLiveToken();
     const normalizedModel = normalizeLiveModel(model);
     const wsUrl = `${LIVE_WS_URL}?access_token=${encodeURIComponent(token)}`;
+    const safeEndpoint = buildSafeLiveUrlForLog(token);
 
     logDev('Token efimero recibido', maskToken(token));
     logDev('Modelo Live usado', normalizedModel);
-    logDev('WebSocket Live URL', buildSafeLiveUrlForLog(token));
+    logDev('Token con setup bloqueado', tokenSetupLocked);
+    logDev('WebSocket Live URL', safeEndpoint);
+    setDiagnostics((prev) => ({
+      ...prev,
+      model: normalizedModel,
+      endpoint: safeEndpoint,
+      tokenSetupLocked: tokenSetupLocked ? 'Si' : 'No',
+    }));
 
     const session = await new Promise<RawLiveSession>((resolve, reject) => {
       let isSettled = false;
@@ -341,14 +386,17 @@ const VoiceAssistantScreen: React.FC<{
         if (!firstAudioChunkSentRef.current) {
           firstAudioChunkSentRef.current = true;
           logDev('Primer chunk de audio enviado');
+          setDiagnostics((prev) => ({ ...prev, firstAudioChunkSent: true }));
         }
       });
 
       ws.onopen = () => {
         window.clearTimeout(connectionTimeout);
         logDev('WebSocket Live open');
+        setDiagnostics((prev) => ({ ...prev, wsOpen: true }));
         ws.send(JSON.stringify(setupMessage));
         logDev('Setup Live enviado', { model: normalizedModel, mode });
+        setDiagnostics((prev) => ({ ...prev, setupSent: true }));
         if (!isSettled) {
           isSettled = true;
           resolve(rawSession);
@@ -363,8 +411,10 @@ const VoiceAssistantScreen: React.FC<{
           message = await parseLiveMessage(event);
         } catch (error) {
           logDev('No se pudo parsear mensaje Live', error);
+          setDiagnostics((prev) => ({ ...prev, lastMessage: 'No se pudo parsear mensaje' }));
           return;
         }
+        setDiagnostics((prev) => ({ ...prev, lastMessage: summarizeLiveMessage(message) }));
 
         if (message.setupComplete) logDev('Setup Live confirmado por servidor');
 
@@ -469,6 +519,12 @@ const VoiceAssistantScreen: React.FC<{
       ws.onclose = (event) => {
         window.clearTimeout(connectionTimeout);
         logDev('WebSocket Live cerrado', { code: event.code, reason: event.reason, wasClean: event.wasClean });
+        setDiagnostics((prev) => ({
+          ...prev,
+          closeCode: String(event.code || '-'),
+          closeReason: event.reason || '-',
+          wasClean: event.wasClean ? 'Si' : 'No',
+        }));
         if (!intentionalCloseRef.current) {
           if (!isSettled) {
             isSettled = true;
@@ -526,6 +582,7 @@ const VoiceAssistantScreen: React.FC<{
     setErrorMessage('');
     setAssistantPartial('');
     setIsTextFallbackEnabled(false);
+    setDiagnostics(INITIAL_DIAGNOSTICS);
     setConnectionState('connecting');
     isStartingRef.current = true;
     intentionalCloseRef.current = false;
@@ -665,10 +722,33 @@ const VoiceAssistantScreen: React.FC<{
 
         {errorMessage && (
           <div className="bg-brand-soft-red border border-brand-soft-red rounded-2xl p-4 text-brand-red font-black text-sm">
-            {errorMessage}
+            <p>{errorMessage}</p>
+            {(diagnostics.closeCode !== '-' || diagnostics.closeReason !== '-') && (
+              <p className="mt-2 text-[11px] font-bold normal-case tracking-normal text-brand-red/80">
+                Codigo: {diagnostics.closeCode} · Motivo: {diagnostics.closeReason}
+              </p>
+            )}
           </div>
         )}
       </div>
+
+      {(connectionState !== 'idle' || diagnostics.wsOpen || diagnostics.closeCode !== '-') && (
+        <div className="mb-5 bg-white/80 rounded-2xl border border-brand-gray-100 p-3 shadow-sm text-[10px] text-brand-gray-500">
+          <p className="font-black uppercase tracking-widest text-brand-gray-400 mb-2">Diagnostico Live</p>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1 font-bold">
+            <span>Modelo</span><span className="truncate text-right">{diagnostics.model}</span>
+            <span>Endpoint</span><span className="truncate text-right">{diagnostics.endpoint}</span>
+            <span>Token setup bloqueado</span><span className="text-right">{diagnostics.tokenSetupLocked}</span>
+            <span>WebSocket open</span><span className="text-right">{diagnostics.wsOpen ? 'Si' : 'No'}</span>
+            <span>Setup enviado</span><span className="text-right">{diagnostics.setupSent ? 'Si' : 'No'}</span>
+            <span>Primer audio</span><span className="text-right">{diagnostics.firstAudioChunkSent ? 'Si' : 'No'}</span>
+            <span>Close code</span><span className="text-right">{diagnostics.closeCode}</span>
+            <span>Close reason</span><span className="truncate text-right">{diagnostics.closeReason}</span>
+            <span>wasClean</span><span className="text-right">{diagnostics.wasClean}</span>
+            <span>Ultimo mensaje</span><span className="truncate text-right">{diagnostics.lastMessage}</span>
+          </div>
+        </div>
+      )}
 
       {(isTextFallbackEnabled || connectionState === 'error' || isActive) && (
         <div className="mb-5 bg-white rounded-2xl border border-brand-gray-100 p-3 shadow-sm">
