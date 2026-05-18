@@ -9,7 +9,7 @@ type ApiResponse = {
   json: (body: any) => ApiResponse;
 };
 
-const DEFAULT_GEMINI_LIVE_MODEL = 'gemini-live-2.5-flash-preview';
+const DEFAULT_GEMINI_LIVE_MODEL = 'gemini-3.1-flash-live-preview';
 
 export default async function handler(req: ApiRequest, res: ApiResponse) {
   if (req.method !== 'POST') {

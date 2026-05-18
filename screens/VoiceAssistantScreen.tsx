@@ -1,6 +1,4 @@
 import React, { useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { GoogleGenAI, LiveServerMessage, Modality, Type, FunctionDeclaration } from '@google/genai';
-import type { Blob as GenAIBlob } from '@google/genai';
 import { MicrophoneIcon, XMarkIcon } from '../components/Icons';
 import { useAuth } from '../contexts/AuthContext';
 import { AppContext } from '../contexts/AppContext';
@@ -11,9 +9,31 @@ type ConnectionState = 'idle' | 'connecting' | 'listening' | 'processing' | 'err
 type ConversationItem = { speaker: 'system' | 'user'; text: string };
 type LiveTokenResponse = { token?: string; model?: string; error?: { message?: string } | string };
 type StartMode = 'voice' | 'text';
+type LiveAudioBlob = { data: string; mimeType: string };
+type FunctionCall = { id?: string; name?: string; args?: Record<string, unknown> };
+type RawLiveServerMessage = {
+  setupComplete?: unknown;
+  serverContent?: {
+    inputTranscription?: { text?: string; finished?: boolean };
+    outputTranscription?: { text?: string };
+    modelTurn?: { parts?: Array<{ text?: string; inlineData?: { data?: string } }> };
+    turnComplete?: boolean;
+    generationComplete?: boolean;
+    interrupted?: boolean;
+  };
+  toolCall?: { functionCalls?: FunctionCall[] };
+};
+type RawLiveSession = {
+  sendRealtimeInput: (params: { audio?: LiveAudioBlob; audioStreamEnd?: boolean }) => void;
+  sendClientContent: (params: { turns?: string; turnComplete?: boolean }) => void;
+  sendToolResponse: (params: { functionResponses: unknown }) => void;
+  close: () => void;
+};
 
 const CONNECTION_TIMEOUT_MS = 12000;
 const INACTIVITY_TIMEOUT_MS = 120000;
+const LIVE_WS_URL = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained';
+const LIVE_SYSTEM_INSTRUCTION = 'Eres el asistente de FisioSilver. Responde de forma breve, clara y segura en español. Ayuda al usuario a registrar constantes medicas. Si te preguntan por comida, recuerdale que debe usar la camara en la seccion de Nutricion.';
 
 function decode(base64: string): Uint8Array {
   const binaryString = atob(base64);
@@ -45,7 +65,7 @@ function resampleTo16K(data: Float32Array, inputSampleRate: number): Float32Arra
   return result;
 }
 
-function createAudioBlob(data: Float32Array, inputSampleRate: number): GenAIBlob {
+function createAudioBlob(data: Float32Array, inputSampleRate: number): LiveAudioBlob {
   const pcm = resampleTo16K(data, inputSampleRate);
   const int16 = new Int16Array(pcm.length);
   for (let i = 0; i < pcm.length; i++) {
@@ -67,17 +87,17 @@ async function decodeAudioData(data: Uint8Array, ctx: AudioContext, sampleRate: 
   return buffer;
 }
 
-const saveHealthDataTool: FunctionDeclaration = {
+const saveHealthDataTool = {
   name: 'saveHealthData',
   description: 'Guarda datos de salud (peso, tension, etc.) en el diario del paciente.',
   parameters: {
-    type: Type.OBJECT,
+    type: 'OBJECT',
     properties: {
-      weight: { type: Type.NUMBER },
-      systolicBP: { type: Type.NUMBER },
-      diastolicBP: { type: Type.NUMBER },
-      pulse: { type: Type.NUMBER },
-      glucose: { type: Type.NUMBER },
+      weight: { type: 'NUMBER' },
+      systolicBP: { type: 'NUMBER' },
+      diastolicBP: { type: 'NUMBER' },
+      pulse: { type: 'NUMBER' },
+      glucose: { type: 'NUMBER' },
     },
   },
 };
@@ -96,17 +116,66 @@ const logDev = (...args: unknown[]) => {
   if ((import.meta as any).env?.DEV) console.warn('[VoiceAssistant]', ...args);
 };
 
-const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> => {
-  let timeoutId: number | undefined;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeoutId = window.setTimeout(() => reject(new Error(message)), timeoutMs);
-  });
+const maskToken = (token: string) => `${token.slice(0, 14)}...${token.slice(-6)}`;
 
-  try {
-    return await Promise.race([promise, timeoutPromise]);
-  } finally {
-    if (timeoutId) window.clearTimeout(timeoutId);
-  }
+const normalizeLiveModel = (model: string) => model.startsWith('models/') ? model : `models/${model}`;
+
+const buildLiveSetupMessage = (mode: StartMode, model: string) => ({
+  setup: {
+    model,
+    generationConfig: {
+      responseModalities: [mode === 'voice' ? 'AUDIO' : 'TEXT'],
+      ...(mode === 'voice' ? { speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Charon' } } } } : {}),
+    },
+    systemInstruction: { parts: [{ text: LIVE_SYSTEM_INSTRUCTION }] },
+    ...(mode === 'voice' ? {
+      inputAudioTranscription: {},
+      outputAudioTranscription: {},
+      tools: [{ functionDeclarations: [saveHealthDataTool] }],
+    } : {}),
+  },
+});
+
+const parseLiveMessage = async (event: MessageEvent): Promise<RawLiveServerMessage> => {
+  if (event.data instanceof Blob) return JSON.parse(await event.data.text());
+  if (event.data instanceof ArrayBuffer) return JSON.parse(new TextDecoder().decode(event.data));
+  return JSON.parse(event.data);
+};
+
+const createTextTurn = (text: string) => [{
+  role: 'user',
+  parts: [{ text }],
+}];
+
+const buildSafeLiveUrlForLog = (token: string) => `${LIVE_WS_URL}?access_token=${maskToken(token)}`;
+
+const createRawSession = (ws: WebSocket, onFirstAudioChunk: () => void): RawLiveSession => {
+  const sendJson = (payload: object) => {
+    if (ws.readyState !== WebSocket.OPEN) throw new Error('WebSocket no esta abierto');
+    ws.send(JSON.stringify(payload));
+  };
+
+  return {
+    sendRealtimeInput: ({ audio, audioStreamEnd }) => {
+      if (audio) onFirstAudioChunk();
+      sendJson({ realtimeInput: { ...(audio ? { audio } : {}), ...(audioStreamEnd ? { audioStreamEnd } : {}) } });
+    },
+    sendClientContent: ({ turns, turnComplete = true }) => {
+      sendJson({ clientContent: { turns: turns ? createTextTurn(turns) : [], turnComplete } });
+    },
+    sendToolResponse: ({ functionResponses }) => {
+      sendJson({
+        toolResponse: {
+          functionResponses: Array.isArray(functionResponses) ? functionResponses : [functionResponses],
+        },
+      });
+    },
+    close: () => {
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+        ws.close(1000, 'client_close');
+      }
+    },
+  };
 };
 
 const VoiceAssistantScreen: React.FC<{
@@ -126,7 +195,7 @@ const VoiceAssistantScreen: React.FC<{
   const [textFallback, setTextFallback] = useState('');
   const [isTextFallbackEnabled, setIsTextFallbackEnabled] = useState(false);
 
-  const sessionRef = useRef<any>(null);
+  const sessionRef = useRef<RawLiveSession | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const inputAudioContextRef = useRef<AudioContext | null>(null);
   const outputAudioContextRef = useRef<AudioContext | null>(null);
@@ -141,6 +210,7 @@ const VoiceAssistantScreen: React.FC<{
   const isMountedRef = useRef(true);
   const intentionalCloseRef = useRef(false);
   const inactivityTimerRef = useRef<number | null>(null);
+  const firstAudioChunkSentRef = useRef(false);
 
   const clearInactivityTimer = useCallback(() => {
     if (inactivityTimerRef.current) {
@@ -206,6 +276,7 @@ const VoiceAssistantScreen: React.FC<{
 
     userTranscriptRef.current = '';
     assistantTextRef.current = '';
+    firstAudioChunkSentRef.current = false;
     if (isMountedRef.current) {
       setUserTranscription('');
       setAssistantPartial('');
@@ -247,128 +318,168 @@ const VoiceAssistantScreen: React.FC<{
 
   const connectLiveSession = useCallback(async (mode: StartMode) => {
     const { token, model } = await fetchLiveToken();
-    const ai = new GoogleGenAI({ apiKey: token, httpOptions: { apiVersion: 'v1alpha' } });
+    const normalizedModel = normalizeLiveModel(model);
+    const wsUrl = `${LIVE_WS_URL}?access_token=${encodeURIComponent(token)}`;
 
-    const session = await withTimeout(
-      ai.live.connect({
-        model,
-        callbacks: {
-          onopen: () => {
-            logDev('WebSocket Live conectado');
-          },
-          onmessage: async (message: LiveServerMessage) => {
-            resetInactivityTimer();
+    logDev('Token efimero recibido', maskToken(token));
+    logDev('Modelo Live usado', normalizedModel);
+    logDev('WebSocket Live URL', buildSafeLiveUrlForLog(token));
 
-            const inputText = message.serverContent?.inputTranscription?.text;
-            if (inputText) {
-              userTranscriptRef.current = `${userTranscriptRef.current} ${inputText}`.trim();
-              setUserTranscription(userTranscriptRef.current);
-            }
+    const session = await new Promise<RawLiveSession>((resolve, reject) => {
+      let isSettled = false;
+      const setupMessage = buildLiveSetupMessage(mode, normalizedModel);
+      const connectionTimeout = window.setTimeout(() => {
+        if (isSettled) return;
+        isSettled = true;
+        logDev('Timeout abriendo WebSocket Live');
+        ws.close(4000, 'connection_timeout');
+        reject(new Error('Timeout conectando con Gemini Live'));
+      }, CONNECTION_TIMEOUT_MS);
 
-            if (message.serverContent?.inputTranscription?.finished && userTranscriptRef.current) {
-              const finishedText = userTranscriptRef.current;
-              setConversation((prev) => [...prev, { speaker: 'user', text: finishedText }]);
-              userTranscriptRef.current = '';
-              setUserTranscription('');
-              setConnectionState('processing');
-            }
+      const ws = new WebSocket(wsUrl);
+      const rawSession = createRawSession(ws, () => {
+        if (!firstAudioChunkSentRef.current) {
+          firstAudioChunkSentRef.current = true;
+          logDev('Primer chunk de audio enviado');
+        }
+      });
 
-            const textPart = message.serverContent?.modelTurn?.parts
-              ?.map((part) => (part as { text?: string }).text || '')
-              .join('');
-            const outputText = message.serverContent?.outputTranscription?.text || textPart;
-            if (outputText) {
-              assistantTextRef.current = `${assistantTextRef.current}${outputText}`;
-              setAssistantPartial(assistantTextRef.current);
-            }
+      ws.onopen = () => {
+        window.clearTimeout(connectionTimeout);
+        logDev('WebSocket Live open');
+        ws.send(JSON.stringify(setupMessage));
+        logDev('Setup Live enviado', { model: normalizedModel, mode });
+        if (!isSettled) {
+          isSettled = true;
+          resolve(rawSession);
+        }
+      };
 
-            if (message.toolCall) {
-              for (const fc of message.toolCall.functionCalls) {
-                if (fc.name === 'saveHealthData' && user) {
-                  try {
-                    const merged = { ...context.healthData, ...fc.args };
-                    await saveDailyLog(user.uid, merged);
-                    context.setHealthData(merged);
-                    setConversation((prev) => [...prev, { speaker: 'system', text: 'He anotado sus constantes en el diario.' }]);
-                  } catch (error) {
-                    logDev('No se pudo guardar desde voz', error);
-                    setConversation((prev) => [...prev, { speaker: 'system', text: 'No he podido guardar el dato. Puedes revisarlo manualmente en el diario.' }]);
-                  }
-                }
+      ws.onmessage = async (event) => {
+        resetInactivityTimer();
+        logDev('Mensaje recibido de Gemini Live');
+        let message: RawLiveServerMessage;
+        try {
+          message = await parseLiveMessage(event);
+        } catch (error) {
+          logDev('No se pudo parsear mensaje Live', error);
+          return;
+        }
 
-                try {
-                  sessionRef.current?.sendToolResponse({
-                    functionResponses: { id: fc.id, name: fc.name, response: { result: 'ok' } },
-                  });
-                } catch (error) {
-                  logDev('No se pudo responder a la herramienta de Gemini', error);
-                }
-              }
-            }
+        if (message.setupComplete) logDev('Setup Live confirmado por servidor');
 
-            const audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
-            if (audio && outputAudioContextRef.current) {
+        const inputText = message.serverContent?.inputTranscription?.text;
+        if (inputText) {
+          userTranscriptRef.current = `${userTranscriptRef.current} ${inputText}`.trim();
+          setUserTranscription(userTranscriptRef.current);
+        }
+
+        if (message.serverContent?.inputTranscription?.finished && userTranscriptRef.current) {
+          const finishedText = userTranscriptRef.current;
+          setConversation((prev) => [...prev, { speaker: 'user', text: finishedText }]);
+          userTranscriptRef.current = '';
+          setUserTranscription('');
+          setConnectionState('processing');
+        }
+
+        const textPart = message.serverContent?.modelTurn?.parts
+          ?.map((part) => part.text || '')
+          .join('');
+        const outputText = message.serverContent?.outputTranscription?.text || textPart;
+        if (outputText) {
+          assistantTextRef.current = `${assistantTextRef.current}${outputText}`;
+          setAssistantPartial(assistantTextRef.current);
+        }
+
+        if (message.toolCall?.functionCalls) {
+          for (const fc of message.toolCall.functionCalls) {
+            if (fc.name === 'saveHealthData' && user) {
               try {
-                if (outputAudioContextRef.current.state === 'suspended') await outputAudioContextRef.current.resume();
-                const buffer = await decodeAudioData(decode(audio), outputAudioContextRef.current, 24000, 1);
-                const source = outputAudioContextRef.current.createBufferSource();
-                source.buffer = buffer;
-                source.connect(outputAudioContextRef.current.destination);
-                nextStartTimeRef.current = Math.max(nextStartTimeRef.current, outputAudioContextRef.current.currentTime);
-                source.start(nextStartTimeRef.current);
-                nextStartTimeRef.current += buffer.duration;
-                outputSourcesRef.current.push(source);
-                source.onended = () => {
-                  outputSourcesRef.current = outputSourcesRef.current.filter((item) => item !== source);
-                };
+                const merged = { ...context.healthData, ...(fc.args || {}) };
+                await saveDailyLog(user.uid, merged);
+                context.setHealthData(merged);
+                setConversation((prev) => [...prev, { speaker: 'system', text: 'He anotado sus constantes en el diario.' }]);
               } catch (error) {
-                logDev('No se pudo reproducir audio de Gemini', error);
+                logDev('No se pudo guardar desde voz', error);
+                setConversation((prev) => [...prev, { speaker: 'system', text: 'No he podido guardar el dato. Puedes revisarlo manualmente en el diario.' }]);
               }
             }
 
-            if (message.serverContent?.interrupted) stopOutputPlayback();
-
-            if (message.serverContent?.turnComplete || message.serverContent?.generationComplete) {
-              if (userTranscriptRef.current) {
-                setConversation((prev) => [...prev, { speaker: 'user', text: userTranscriptRef.current }]);
-                userTranscriptRef.current = '';
-                setUserTranscription('');
-              }
-
-              if (assistantTextRef.current.trim()) {
-                setConversation((prev) => [...prev, { speaker: 'system', text: assistantTextRef.current.trim() }]);
-                assistantTextRef.current = '';
-                setAssistantPartial('');
-              }
-
-              setConnectionState('listening');
+            try {
+              sessionRef.current?.sendToolResponse({
+                functionResponses: { id: fc.id, name: fc.name, response: { result: 'ok' } },
+              });
+            } catch (error) {
+              logDev('No se pudo responder a la herramienta de Gemini', error);
             }
-          },
-          onerror: (event) => {
-            logDev('Error en WebSocket Live', event);
-            setErrorMessage('No se pudo mantener la sesion de voz. Puedes reintentar.');
-            cleanupSession('error');
-          },
-          onclose: (event) => {
-            logDev('WebSocket Live cerrado', event);
-            if (!intentionalCloseRef.current) {
-              setErrorMessage('La sesion de voz se ha cerrado. Puedes reintentar.');
-              cleanupSession('error');
-            }
-          },
-        },
-        config: {
-          responseModalities: [mode === 'voice' ? Modality.AUDIO : Modality.TEXT],
-          inputAudioTranscription: mode === 'voice' ? {} : undefined,
-          outputAudioTranscription: mode === 'voice' ? {} : undefined,
-          tools: mode === 'voice' ? [{ functionDeclarations: [saveHealthDataTool] }] : undefined,
-          speechConfig: mode === 'voice' ? { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Charon' } } } : undefined,
-          systemInstruction: 'Eres Fisiosilver, un asistente experto en geriatria. Ayuda al usuario a registrar sus constantes medicas. Si te preguntan por comida, recuerdales que deben usar la camara en la seccion de Nutricion.',
-        },
-      }),
-      CONNECTION_TIMEOUT_MS,
-      'Timeout conectando con Gemini Live',
-    );
+          }
+        }
+
+        const audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
+        if (audio && outputAudioContextRef.current) {
+          try {
+            if (outputAudioContextRef.current.state === 'suspended') await outputAudioContextRef.current.resume();
+            const buffer = await decodeAudioData(decode(audio), outputAudioContextRef.current, 24000, 1);
+            const source = outputAudioContextRef.current.createBufferSource();
+            source.buffer = buffer;
+            source.connect(outputAudioContextRef.current.destination);
+            nextStartTimeRef.current = Math.max(nextStartTimeRef.current, outputAudioContextRef.current.currentTime);
+            source.start(nextStartTimeRef.current);
+            nextStartTimeRef.current += buffer.duration;
+            outputSourcesRef.current.push(source);
+            source.onended = () => {
+              outputSourcesRef.current = outputSourcesRef.current.filter((item) => item !== source);
+            };
+          } catch (error) {
+            logDev('No se pudo reproducir audio de Gemini', error);
+          }
+        }
+
+        if (message.serverContent?.interrupted) stopOutputPlayback();
+
+        if (message.serverContent?.turnComplete || message.serverContent?.generationComplete) {
+          if (userTranscriptRef.current) {
+            setConversation((prev) => [...prev, { speaker: 'user', text: userTranscriptRef.current }]);
+            userTranscriptRef.current = '';
+            setUserTranscription('');
+          }
+
+          if (assistantTextRef.current.trim()) {
+            setConversation((prev) => [...prev, { speaker: 'system', text: assistantTextRef.current.trim() }]);
+            assistantTextRef.current = '';
+            setAssistantPartial('');
+          }
+
+          setConnectionState('listening');
+        }
+      };
+
+      ws.onerror = (event) => {
+        logDev('Error en WebSocket Live', event);
+        if (!isSettled) {
+          window.clearTimeout(connectionTimeout);
+          isSettled = true;
+          reject(new Error('Error abriendo WebSocket Live'));
+          return;
+        }
+        setErrorMessage('No se pudo mantener la sesion de voz. Puedes reintentar.');
+        cleanupSession('error');
+      };
+
+      ws.onclose = (event) => {
+        window.clearTimeout(connectionTimeout);
+        logDev('WebSocket Live cerrado', { code: event.code, reason: event.reason, wasClean: event.wasClean });
+        if (!intentionalCloseRef.current) {
+          if (!isSettled) {
+            isSettled = true;
+            reject(new Error(`WebSocket Live cerrado antes de iniciar: ${event.code} ${event.reason}`.trim()));
+            return;
+          }
+          setErrorMessage('La sesion de voz se ha cerrado. Puedes reintentar.');
+          cleanupSession('error');
+        }
+      };
+    });
 
     sessionRef.current = session;
   }, [cleanupSession, context, resetInactivityTimer, stopOutputPlayback, user]);
@@ -392,7 +503,7 @@ const VoiceAssistantScreen: React.FC<{
 
     scriptProcessor.onaudioprocess = (event) => {
       const session = sessionRef.current;
-      if (!session || connectionState === 'connecting') return;
+      if (!session) return;
       try {
         session.sendRealtimeInput({ audio: createAudioBlob(event.inputBuffer.getChannelData(0), inputContext.sampleRate) });
       } catch (error) {
@@ -407,7 +518,7 @@ const VoiceAssistantScreen: React.FC<{
     sourceNodeRef.current = source;
     scriptProcessorRef.current = scriptProcessor;
     silentGainRef.current = silentGain;
-  }, [connectionState]);
+  }, []);
 
   const startConversation = useCallback(async () => {
     if (!user || isStartingRef.current || sessionRef.current) return;
