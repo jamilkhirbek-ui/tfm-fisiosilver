@@ -133,12 +133,14 @@ const getFriendlyError = (error: unknown) => {
   if (error instanceof DOMException && error.name === 'NotFoundError') {
     return 'No se ha encontrado microfono. Puedes usar el asistente escribiendo.';
   }
-  return 'Error, reintentar';
+  return 'No se pudo iniciar el asistente. Intentalo de nuevo o usa el texto.';
 };
 
 const logDev = (...args: unknown[]) => {
   if ((import.meta as any).env?.DEV) console.warn('[VoiceAssistant]', ...args);
 };
+
+const showVoiceDebug = Boolean((import.meta as any).env?.DEV || (import.meta as any).env?.VITE_SHOW_VOICE_DEBUG === 'true');
 
 const maskToken = (token: string) => `${token.slice(0, 14)}...${token.slice(-6)}`;
 
@@ -531,7 +533,7 @@ const VoiceAssistantScreen: React.FC<{
             reject(new Error(`WebSocket Live cerrado antes de iniciar: ${event.code} ${event.reason}`.trim()));
             return;
           }
-          setErrorMessage('La sesion de voz se ha cerrado. Puedes reintentar.');
+          setErrorMessage('No se pudo iniciar el asistente. Intentalo de nuevo o usa el texto.');
           cleanupSession('error');
         }
       };
@@ -613,7 +615,7 @@ const VoiceAssistantScreen: React.FC<{
   const stopConversation = useCallback(async () => {
     await cleanupSession('idle');
     setErrorMessage('');
-    setConversation((prev) => [...prev, { speaker: 'system', text: 'Sesion detenida. Puedes volver a iniciar el asistente cuando quieras.' }]);
+    setConversation((prev) => [...prev, { speaker: 'system', text: 'Sesión detenida. Puedes volver a iniciar el asistente cuando quieras.' }]);
   }, [cleanupSession]);
 
   const sendTextMessage = useCallback(async () => {
@@ -668,7 +670,7 @@ const VoiceAssistantScreen: React.FC<{
       : connectionState === 'processing'
         ? 'Procesando...'
         : connectionState === 'error'
-          ? 'Error, reintentar'
+          ? 'No se pudo iniciar'
           : 'Listo para iniciar';
 
   return (
@@ -723,7 +725,7 @@ const VoiceAssistantScreen: React.FC<{
         {errorMessage && (
           <div className="bg-brand-soft-red border border-brand-soft-red rounded-2xl p-4 text-brand-red font-black text-sm">
             <p>{errorMessage}</p>
-            {(diagnostics.closeCode !== '-' || diagnostics.closeReason !== '-') && (
+            {showVoiceDebug && (diagnostics.closeCode !== '-' || diagnostics.closeReason !== '-') && (
               <p className="mt-2 text-[11px] font-bold normal-case tracking-normal text-brand-red/80">
                 Codigo: {diagnostics.closeCode} · Motivo: {diagnostics.closeReason}
               </p>
@@ -732,7 +734,7 @@ const VoiceAssistantScreen: React.FC<{
         )}
       </div>
 
-      {(connectionState !== 'idle' || diagnostics.wsOpen || diagnostics.closeCode !== '-') && (
+      {showVoiceDebug && (connectionState !== 'idle' || diagnostics.wsOpen || diagnostics.closeCode !== '-') && (
         <div className="mb-5 bg-white/80 rounded-2xl border border-brand-gray-100 p-3 shadow-sm text-[10px] text-brand-gray-500">
           <p className="font-black uppercase tracking-widest text-brand-gray-400 mb-2">Diagnostico Live</p>
           <div className="grid grid-cols-2 gap-x-3 gap-y-1 font-bold">
